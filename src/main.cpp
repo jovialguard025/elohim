@@ -7,6 +7,7 @@
 #include "evaluation.hpp"
 #include "training.hpp"
 #include "correlation.hpp"
+#include "cross_validation.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -137,9 +138,99 @@ int runInference(int argc, char* argv[]) {
     return 0;
 }
 
+int runStage0() {
+    std::cout << "===================================================================\n";
+    std::cout << " Stage 0: 5-Fold Stratified Cross-Validation & Diagnostic Error Analysis\n";
+    std::cout << "===================================================================\n\n";
+
+    ensureDir("results");
+    ensureDir("models");
+
+    std::string dev_path = "data/raw/gap-development.tsv";
+    std::string val_path = "data/raw/gap-validation.tsv";
+
+    std::cout << "[Step 1] Loading GAP development and validation partitions...\n";
+    auto dev_records = msar::loadGapDataset(dev_path);
+    auto val_records = msar::loadGapDataset(val_path);
+
+    // Combine dev (2000) + val (454) = 2454 samples for CV
+    std::vector<msar::GapRecord> combined;
+    combined.insert(combined.end(), dev_records.begin(), dev_records.end());
+    combined.insert(combined.end(), val_records.begin(), val_records.end());
+
+    auto stats = msar::computePartitionStats(combined);
+    std::cout << "  Combined Dataset: " << stats.total_samples << " samples (A=" << stats.count_a
+              << ", B=" << stats.count_b << ", Neither=" << stats.count_neither << ")\n";
+
+    std::cout << "\n[Step 2] Extracting 36-feature V2 representations for all samples...\n";
+    std::vector<std::vector<double>> raw_features;
+    raw_features.reserve(combined.size());
+    for (const auto& r : combined) {
+        raw_features.push_back(msar::extractFeaturesV2(r));
+    }
+
+    std::cout << "\n[Step 3] Running 5-Fold Stratified Cross-Validation (Seed = 42)...\n";
+    msar::TrainingConfig base_cfg;
+    base_cfg.experiment_name = "stage0_cv_baseline";
+    base_cfg.feature_dim = 36;
+    base_cfg.hidden_dim = 32;
+    base_cfg.output_dim = 3;
+    base_cfg.learning_rate = 0.001;
+    base_cfg.class_weight_alpha = 0.50;
+    base_cfg.batch_size = 32;
+    base_cfg.max_epochs = 500;
+    base_cfg.patience = 50;
+    base_cfg.seed = 42;
+
+    auto cv = msar::runCrossValidation(combined, raw_features, base_cfg, 5, 42);
+
+    std::cout << "\n===================================================================\n";
+    std::cout << " STAGE 0 CROSS-VALIDATION RESULTS (N = 2,454, 5 FOLDS)\n";
+    std::cout << "===================================================================\n";
+    std::cout << std::fixed << std::setprecision(2);
+    for (size_t f = 0; f < cv.fold_results.size(); ++f) {
+        std::cout << "  Fold " << (f + 1) << ": Acc = " << (cv.fold_results[f].accuracy * 100.0) 
+                  << "% | Macro-F1 = " << std::setprecision(4) << cv.fold_results[f].macro_f1
+                  << " | Weighted-F1 = " << cv.fold_results[f].weighted_f1 << "\n";
+    }
+    std::cout << "-------------------------------------------------------------------\n";
+    std::cout << "  Mean Accuracy:    " << std::setprecision(2) << (cv.acc_mean * 100.0) << " ± " << (cv.acc_std * 100.0) << "%\n";
+    std::cout << "  Mean Macro-F1:    " << std::setprecision(4) << cv.macro_f1_mean << " ± " << cv.macro_f1_std << "\n";
+    std::cout << "  Mean Weighted-F1: " << cv.weighted_f1_mean << " ± " << cv.weighted_f1_std << "\n";
+    std::cout << "  Mean Loss:        " << cv.loss_mean << " ± " << cv.loss_std << "\n";
+    std::cout << "-------------------------------------------------------------------\n\n";
+
+    std::cout << "Overall Out-Of-Fold (OOF) Metrics:\n";
+    std::cout << cv.oof_overall_eval.toString() << "\n";
+
+    std::cout << "\n[Step 4] Generating detailed error analysis in results/error_analysis.md...\n";
+    msar::generateErrorAnalysisReport(combined, cv, "results/error_analysis.md");
+    std::cout << "  Saved results/error_analysis.md\n";
+
+    // Write to results/cv_summary.csv
+    std::ofstream cv_csv("results/cv_summary.csv");
+    if (cv_csv.is_open()) {
+        cv_csv << "Stage,Description,Accuracy_Mean,Accuracy_Std,MacroF1_Mean,MacroF1_Std,WeightedF1_Mean,WeightedF1_Std,Loss_Mean,Loss_Std\n";
+        cv_csv << "Stage 0,Baseline V2 36-feat MLP,"
+               << std::fixed << std::setprecision(4)
+               << cv.acc_mean << "," << cv.acc_std << ","
+               << cv.macro_f1_mean << "," << cv.macro_f1_std << ","
+               << cv.weighted_f1_mean << "," << cv.weighted_f1_std << ","
+               << cv.loss_mean << "," << cv.loss_std << "\n";
+        std::cout << "  Saved results/cv_summary.csv\n";
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && std::string(argv[1]) == "--predict") {
-        return runInference(argc, argv);
+    if (argc > 1) {
+        std::string arg = argv[1];
+        if (arg == "--predict") {
+            return runInference(argc, argv);
+        } else if (arg == "--stage0" || arg == "--cv") {
+            return runStage0();
+        }
     }
     return runAllExperiments();
 }

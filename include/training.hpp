@@ -48,6 +48,8 @@ struct TrainingResult {
     EvaluationResult final_val_eval;
     std::vector<EpochRecord> history;
     std::vector<double> class_weights;
+    std::vector<int> val_preds;
+    std::vector<std::vector<double>> val_probs;
 };
 
 inline std::vector<double> computeClassWeights(const std::vector<int>& y_train, double alpha) {
@@ -189,6 +191,8 @@ inline TrainingResult trainModel(
     // Final evaluation on validation set using restored best checkpoint
     std::vector<std::vector<double>> best_val_probs;
     std::vector<int> best_val_preds = model.predict(X_val, best_val_probs);
+    result.val_preds = best_val_preds;
+    result.val_probs = best_val_probs;
     result.final_val_eval = evaluatePredictions(y_val, best_val_preds, best_val_probs, result.class_weights);
     result.best_epoch = best_epoch;
     result.best_val_acc = result.final_val_eval.accuracy;

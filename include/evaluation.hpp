@@ -20,6 +20,7 @@ struct ClassMetrics {
 struct EvaluationResult {
     double accuracy;
     double macro_f1;
+    double weighted_f1;
     double weighted_loss;
     std::vector<ClassMetrics> class_metrics; // size 3: 0 (A), 1 (B), 2 (Neither)
     int confusion_matrix[3][3];              // [actual][predicted]
@@ -29,8 +30,9 @@ struct EvaluationResult {
     std::string toString() const {
         std::stringstream ss;
         ss << std::fixed << std::setprecision(4);
-        ss << "Accuracy: " << (accuracy * 100.0) << "% (" << correct_predictions << " / " << total_samples << ")\n";
-        ss << "Macro-F1: " << macro_f1 << "\n";
+        ss << "Accuracy:    " << (accuracy * 100.0) << "% (" << correct_predictions << " / " << total_samples << ")\n";
+        ss << "Macro-F1:    " << macro_f1 << "\n";
+        ss << "Weighted-F1: " << weighted_f1 << "\n";
         ss << "Weighted Loss: " << weighted_loss << "\n\n";
 
         ss << "Per-Class Breakdown:\n";
@@ -130,6 +132,13 @@ inline EvaluationResult evaluatePredictions(
     }
 
     res.macro_f1 = sum_f1 / 3.0;
+
+    double weighted_f1_sum = 0.0;
+    for (int c = 0; c < 3; ++c) {
+        weighted_f1_sum += res.class_metrics[c].f1 * static_cast<double>(res.class_metrics[c].support);
+    }
+    res.weighted_f1 = res.total_samples > 0 ? (weighted_f1_sum / static_cast<double>(res.total_samples)) : 0.0;
+
     return res;
 }
 
