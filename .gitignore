@@ -1,0 +1,64 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C / C++ compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Environments and Virtualenvs
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# Secrets, Credentials, Private Settings
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+credentials.json
+local.properties
+
+# Large Data & Raw Datasets (Keep raw data out unless explicitly approved)
+data/raw/*
+!data/raw/.gitkeep
+*.tar.gz
+*.zip
+*.h5
+*.hdf5
+*.parquet
+
+# Heavy Model Checkpoints & Experimental Variants (Store final models only)
+models/checkpoints/*
+!models/checkpoints/.gitkeep
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.onnx
+
+# Experiment logs and tracking
+runs/
+wandb/
+mlruns/
+*.log
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE / Editor artifacts
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
