@@ -1,0 +1,30 @@
+{
+  "experiment_name": "exp6_reduced_30feat",
+  "dataset_partition": "GAP development (train: 2000), GAP validation (val: 454)",
+  "feature_representation": "30 features (Ablated V2)",
+  "network_architecture": "30 -> 32 -> 3 MLP",
+  "optimizer": "Adam",
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "max_epochs": 500,
+  "early_stopping_patience": 50,
+  "class_weight_exponent": 0.5,
+  "l2_lambda": 0,
+  "random_seed": 42,
+  "best_epoch": 7,
+  "final_training_loss": 0.854837,
+  "validation_loss": 0.965981,
+  "validation_accuracy": 0.605727,
+  "macro_f1": 0.517109,
+  "per_class_metrics": {
+    "A": {"precision": 0.631579, "recall": 0.513369, "f1": 0.566372, "support": 187},
+    "B": {"precision": 0.622642, "recall": 0.804878, "f1": 0.702128, "support": 205},
+    "Neither": {"precision": 0.378378, "recall": 0.225806, "f1": 0.282828, "support": 62}
+  },
+  "confusion_matrix": [
+    [96, 74, 17],
+    [34, 165, 6],
+    [22, 26, 14]
+  ],
+  "checkpoint_file": "models/model_exp6_reduced.bin"
+}

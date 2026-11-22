@@ -1,0 +1,30 @@
+{
+  "experiment_name": "exp5_class_weight_alpha065",
+  "dataset_partition": "GAP development (train: 2000), GAP validation (val: 454)",
+  "feature_representation": "36 features (V2)",
+  "network_architecture": "36 -> 32 -> 3 MLP",
+  "optimizer": "Adam",
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "max_epochs": 500,
+  "early_stopping_patience": 50,
+  "class_weight_exponent": 0.65,
+  "l2_lambda": 0,
+  "random_seed": 42,
+  "best_epoch": 48,
+  "final_training_loss": 0.779907,
+  "validation_loss": 1.04471,
+  "validation_accuracy": 0.614537,
+  "macro_f1": 0.546501,
+  "per_class_metrics": {
+    "A": {"precision": 0.65, "recall": 0.55615, "f1": 0.599424, "support": 187},
+    "B": {"precision": 0.648536, "recall": 0.756098, "f1": 0.698198, "support": 205},
+    "Neither": {"precision": 0.363636, "recall": 0.322581, "f1": 0.34188, "support": 62}
+  },
+  "confusion_matrix": [
+    [104, 63, 20],
+    [35, 155, 15],
+    [21, 21, 20]
+  ],
+  "checkpoint_file": "models/model_exp5_alpha065.bin"
+}

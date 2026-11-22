@@ -1,0 +1,9 @@
+# Confidence-Gated MSAR Reproduction Dependencies
+
+# System & Compiler:
+# - C++14 compliant compiler (g++ >= 6.3.0, clang++, or MSVC)
+# - Standard C++ library with STL support
+
+# Python (for evaluation plot rendering and dataset verification):
+numpy>=1.20.0
+matplotlib>=3.5.0

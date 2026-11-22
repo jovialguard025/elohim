@@ -1,0 +1,30 @@
+{
+  "experiment_name": "exp2_v2_inv_freq_alpha100",
+  "dataset_partition": "GAP development (train: 2000), GAP validation (val: 454)",
+  "feature_representation": "36 features (V2)",
+  "network_architecture": "36 -> 32 -> 3 MLP",
+  "optimizer": "Adam",
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "max_epochs": 500,
+  "early_stopping_patience": 50,
+  "class_weight_exponent": 1,
+  "l2_lambda": 0,
+  "random_seed": 42,
+  "best_epoch": 62,
+  "final_training_loss": 0.773194,
+  "validation_loss": 1.10135,
+  "validation_accuracy": 0.568282,
+  "macro_f1": 0.524219,
+  "per_class_metrics": {
+    "A": {"precision": 0.60119, "recall": 0.540107, "f1": 0.569014, "support": 187},
+    "B": {"precision": 0.663265, "recall": 0.634146, "f1": 0.648379, "support": 205},
+    "Neither": {"precision": 0.3, "recall": 0.435484, "f1": 0.355263, "support": 62}
+  },
+  "confusion_matrix": [
+    [101, 48, 38],
+    [50, 130, 25],
+    [17, 18, 27]
+  ],
+  "checkpoint_file": "models/model_exp2_inv_freq.bin"
+}

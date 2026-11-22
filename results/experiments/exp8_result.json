@@ -1,0 +1,30 @@
+{
+  "experiment_name": "exp8_l2_reg_00001",
+  "dataset_partition": "GAP development (train: 2000), GAP validation (val: 454)",
+  "feature_representation": "36 features (V2)",
+  "network_architecture": "36 -> 32 -> 3 MLP (L2=1e-4)",
+  "optimizer": "Adam",
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "max_epochs": 500,
+  "early_stopping_patience": 50,
+  "class_weight_exponent": 0.5,
+  "l2_lambda": 0.0001,
+  "random_seed": 42,
+  "best_epoch": 46,
+  "final_training_loss": 0.768375,
+  "validation_loss": 1.00554,
+  "validation_accuracy": 0.629956,
+  "macro_f1": 0.555121,
+  "per_class_metrics": {
+    "A": {"precision": 0.649123, "recall": 0.593583, "f1": 0.620112, "support": 187},
+    "B": {"precision": 0.659664, "recall": 0.765854, "f1": 0.708804, "support": 205},
+    "Neither": {"precision": 0.4, "recall": 0.290323, "f1": 0.336449, "support": 62}
+  },
+  "confusion_matrix": [
+    [111, 60, 16],
+    [37, 157, 11],
+    [23, 21, 18]
+  ],
+  "checkpoint_file": "models/model_exp8_l2.bin"
+}

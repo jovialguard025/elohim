@@ -1,0 +1,26 @@
+Feature Correlation Audit (GAP Development Set):
+Total Features: 36
+Pairs with |r| >= 0.90: 18
+Pairs with |r| >= 0.95: 4
+Pairs with |r| >= 0.99: 4
+
+Top Correlated Feature Pairs (|r| >= 0.90):
+---------------------------------------------------------
+Feature 21 <-> Feature 25 : r = 0.9971
+Feature  3 <-> Feature  7 : r = 0.9963
+Feature 18 <-> Feature 24 : r = 0.9956
+Feature  0 <-> Feature  6 : r = 0.9955
+Feature 25 <-> Feature 26 : r = -0.9461
+Feature  3 <-> Feature 16 : r = 0.9431
+Feature 21 <-> Feature 26 : r = -0.9413
+Feature 21 <-> Feature 34 : r = 0.9412
+Feature  7 <-> Feature 16 : r = 0.9401
+Feature 25 <-> Feature 34 : r = 0.9385
+Feature  7 <-> Feature  8 : r = -0.9286
+Feature 25 <-> Feature 27 : r = -0.9251
+Feature  3 <-> Feature  8 : r = -0.9228
+Feature 21 <-> Feature 27 : r = -0.9197
+Feature  7 <-> Feature  9 : r = -0.9083
+Feature  3 <-> Feature  9 : r = -0.9042
+Feature  1 <-> Feature  7 : r = -0.9022
+Feature  1 <-> Feature  3 : r = -0.9012

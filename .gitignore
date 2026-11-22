@@ -1,0 +1,20 @@
+# Compiled Binaries & Object Files
+*.exe
+*.o
+*.obj
+msar_reproduce
+run_tests
+
+# Temporary and log files
+temp_best.bin
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
