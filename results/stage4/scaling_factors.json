@@ -1,0 +1,9 @@
+{
+  "scale_A": 0.85,
+  "scale_B": 0.9,
+  "scale_Neither": 0.9,
+  "oof_macro_f1_before": 0.655366,
+  "oof_macro_f1_after": 0.656136,
+  "oof_accuracy_before": 0.704564,
+  "oof_accuracy_after": 0.704971
+}

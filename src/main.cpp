@@ -2,12 +2,14 @@
 #include "preprocessing.hpp"
 #include "features_v1.hpp"
 #include "features_v2.hpp"
+#include "features_v3.hpp"
 #include "standardizer.hpp"
 #include "mlp.hpp"
 #include "evaluation.hpp"
 #include "training.hpp"
 #include "correlation.hpp"
 #include "cross_validation.hpp"
+#include "mention_ranker.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -16,6 +18,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <cmath>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -29,115 +32,9 @@ void ensureDir(const std::string& path) {
     MAKE_DIR(path.c_str());
 }
 
-void saveExperimentJson(const std::string& filepath, const msar::TrainingResult& res, const std::string& feat_name, const std::string& arch_str) {
-    std::ofstream out(filepath);
-    if (!out.is_open()) return;
-
-    out << "{\n";
-    out << "  \"experiment_name\": \"" << res.config.experiment_name << "\",\n";
-    out << "  \"dataset_partition\": \"GAP development (train: 2000), GAP validation (val: 454)\",\n";
-    out << "  \"feature_representation\": \"" << feat_name << "\",\n";
-    out << "  \"network_architecture\": \"" << arch_str << "\",\n";
-    out << "  \"optimizer\": \"Adam\",\n";
-    out << "  \"learning_rate\": " << res.config.learning_rate << ",\n";
-    out << "  \"batch_size\": " << res.config.batch_size << ",\n";
-    out << "  \"max_epochs\": " << res.config.max_epochs << ",\n";
-    out << "  \"early_stopping_patience\": " << res.config.patience << ",\n";
-    out << "  \"class_weight_exponent\": " << res.config.class_weight_alpha << ",\n";
-    out << "  \"l2_lambda\": " << res.config.l2_lambda << ",\n";
-    out << "  \"random_seed\": " << res.config.seed << ",\n";
-    out << "  \"best_epoch\": " << res.best_epoch << ",\n";
-    out << "  \"final_training_loss\": " << (res.history.empty() ? 0.0 : res.history[res.best_epoch > 0 ? res.best_epoch - 1 : 0].train_loss) << ",\n";
-    out << "  \"validation_loss\": " << res.best_val_loss << ",\n";
-    out << "  \"validation_accuracy\": " << res.best_val_acc << ",\n";
-    out << "  \"macro_f1\": " << res.best_val_macro_f1 << ",\n";
-    out << "  \"per_class_metrics\": {\n";
-    out << "    \"A\": {\"precision\": " << res.final_val_eval.class_metrics[0].precision << ", \"recall\": " << res.final_val_eval.class_metrics[0].recall << ", \"f1\": " << res.final_val_eval.class_metrics[0].f1 << ", \"support\": " << res.final_val_eval.class_metrics[0].support << "},\n";
-    out << "    \"B\": {\"precision\": " << res.final_val_eval.class_metrics[1].precision << ", \"recall\": " << res.final_val_eval.class_metrics[1].recall << ", \"f1\": " << res.final_val_eval.class_metrics[1].f1 << ", \"support\": " << res.final_val_eval.class_metrics[1].support << "},\n";
-    out << "    \"Neither\": {\"precision\": " << res.final_val_eval.class_metrics[2].precision << ", \"recall\": " << res.final_val_eval.class_metrics[2].recall << ", \"f1\": " << res.final_val_eval.class_metrics[2].f1 << ", \"support\": " << res.final_val_eval.class_metrics[2].support << "}\n";
-    out << "  },\n";
-    out << "  \"confusion_matrix\": [\n";
-    for (int r = 0; r < 3; ++r) {
-        out << "    [" << res.final_val_eval.confusion_matrix[r][0] << ", "
-                       << res.final_val_eval.confusion_matrix[r][1] << ", "
-                       << res.final_val_eval.confusion_matrix[r][2] << "]"
-                       << (r < 2 ? ",\n" : "\n");
-    }
-    out << "  ],\n";
-    out << "  \"checkpoint_file\": \"" << res.config.checkpoint_path << "\"\n";
-    out << "}\n";
-}
-
-int runAllExperiments();
-
-int runInference(int argc, char* argv[]) {
-    if (argc < 8) {
-        std::cout << "Usage: msar_reproduce.exe --predict \"<text>\" \"<pronoun>\" <pron_offset> \"<cand_A>\" <a_offset> \"<cand_B>\" <b_offset>\n";
-        return 1;
-    }
-    std::string text = argv[2];
-    std::string pronoun = argv[3];
-    long long pron_offset = std::stoll(argv[4]);
-    std::string cand_a = argv[5];
-    long long a_offset = std::stoll(argv[6]);
-    std::string cand_b = argv[7];
-    long long b_offset = std::stoll(argv[8]);
-
-    msar::GapRecord rec;
-    rec.id = "inference-sample";
-    rec.text = text;
-    rec.pronoun = pronoun;
-    rec.pronoun_offset = pron_offset;
-    rec.a = cand_a;
-    rec.a_offset = a_offset;
-    rec.b = cand_b;
-    rec.b_offset = b_offset;
-
-    // Load standardizer
-    msar::FeatureStandardizer scaler;
-    try {
-        scaler.load("models/standardizer_v2.txt");
-    } catch (const std::exception& e) {
-        std::cerr << "Error loading standardizer: " << e.what() << "\nPlease run experiments first.\n";
-        return 1;
-    }
-
-    // Load best model
-    msar::MultilayerPerceptron model(36, 32, 3);
-    try {
-        model.loadCheckpoint("models/best_model.bin");
-    } catch (const std::exception& e) {
-        std::cerr << "Error loading model checkpoint: " << e.what() << "\nPlease run experiments first.\n";
-        return 1;
-    }
-
-    auto raw_features = msar::extractFeaturesV2(rec);
-    auto std_features = scaler.transformSingle(raw_features);
-
-    std::vector<double> h, probs;
-    model.forward(std_features, h, probs);
-
-    int best_c = 0;
-    if (probs[1] > probs[best_c]) best_c = 1;
-    if (probs[2] > probs[best_c]) best_c = 2;
-
-    const char* class_names[3] = {"Candidate A", "Candidate B", "Neither"};
-
-    std::cout << "\n--- Antecedent Prediction Result ---\n";
-    std::cout << "Text: \"" << text << "\"\n";
-    std::cout << "Pronoun: \"" << pronoun << "\" at offset " << pron_offset << "\n";
-    std::cout << "Candidate A: \"" << cand_a << "\" at offset " << a_offset << "\n";
-    std::cout << "Candidate B: \"" << cand_b << "\" at offset " << b_offset << "\n\n";
-    std::cout << "Predicted Class: " << class_names[best_c] << " (Class " << best_c << ")\n";
-    std::cout << std::fixed << std::setprecision(4);
-    std::cout << "Class Probabilities:\n";
-    std::cout << "  P(Candidate A: " << cand_a << ") = " << (probs[0] * 100.0) << "%\n";
-    std::cout << "  P(Candidate B: " << cand_b << ") = " << (probs[1] * 100.0) << "%\n";
-    std::cout << "  P(Neither)                     = " << (probs[2] * 100.0) << "%\n";
-
-    return 0;
-}
-
+// ===================================================================
+//  Stage 0: Baseline 5-Fold Stratified Cross-Validation
+// ===================================================================
 int runStage0() {
     std::cout << "===================================================================\n";
     std::cout << " Stage 0: 5-Fold Stratified Cross-Validation & Diagnostic Error Analysis\n";
@@ -153,7 +50,6 @@ int runStage0() {
     auto dev_records = msar::loadGapDataset(dev_path);
     auto val_records = msar::loadGapDataset(val_path);
 
-    // Combine dev (2000) + val (454) = 2454 samples for CV
     std::vector<msar::GapRecord> combined;
     combined.insert(combined.end(), dev_records.begin(), dev_records.end());
     combined.insert(combined.end(), val_records.begin(), val_records.end());
@@ -194,10 +90,10 @@ int runStage0() {
                   << " | Weighted-F1 = " << cv.fold_results[f].weighted_f1 << "\n";
     }
     std::cout << "-------------------------------------------------------------------\n";
-    std::cout << "  Mean Accuracy:    " << std::setprecision(2) << (cv.acc_mean * 100.0) << " ± " << (cv.acc_std * 100.0) << "%\n";
-    std::cout << "  Mean Macro-F1:    " << std::setprecision(4) << cv.macro_f1_mean << " ± " << cv.macro_f1_std << "\n";
-    std::cout << "  Mean Weighted-F1: " << cv.weighted_f1_mean << " ± " << cv.weighted_f1_std << "\n";
-    std::cout << "  Mean Loss:        " << cv.loss_mean << " ± " << cv.loss_std << "\n";
+    std::cout << "  Mean Accuracy:    " << std::setprecision(2) << (cv.acc_mean * 100.0) << " +/- " << (cv.acc_std * 100.0) << "%\n";
+    std::cout << "  Mean Macro-F1:    " << std::setprecision(4) << cv.macro_f1_mean << " +/- " << cv.macro_f1_std << "\n";
+    std::cout << "  Mean Weighted-F1: " << cv.weighted_f1_mean << " +/- " << cv.weighted_f1_std << "\n";
+    std::cout << "  Mean Loss:        " << cv.loss_mean << " +/- " << cv.loss_std << "\n";
     std::cout << "-------------------------------------------------------------------\n\n";
 
     std::cout << "Overall Out-Of-Fold (OOF) Metrics:\n";
@@ -207,7 +103,6 @@ int runStage0() {
     msar::generateErrorAnalysisReport(combined, cv, "results/error_analysis.md");
     std::cout << "  Saved results/error_analysis.md\n";
 
-    // Write to results/cv_summary.csv
     std::ofstream cv_csv("results/cv_summary.csv");
     if (cv_csv.is_open()) {
         cv_csv << "Stage,Description,Accuracy_Mean,Accuracy_Std,MacroF1_Mean,MacroF1_Std,WeightedF1_Mean,WeightedF1_Std,Loss_Mean,Loss_Std\n";
@@ -223,6 +118,9 @@ int runStage0() {
     return 0;
 }
 
+// ===================================================================
+//  Stage 1: Symmetry & Data Augmentation (A<->B Swap + TTA)
+// ===================================================================
 int runStage1() {
     std::cout << "===================================================================\n";
     std::cout << " Stage 1: Symmetry & Data Augmentation (A<->B Swap + TTA)\n";
@@ -269,16 +167,15 @@ int runStage1() {
                   << " | Weighted-F1 = " << cv.fold_results[f].weighted_f1 << "\n";
     }
     std::cout << "-------------------------------------------------------------------\n";
-    std::cout << "  Mean Accuracy:    " << std::setprecision(2) << (cv.acc_mean * 100.0) << " ± " << (cv.acc_std * 100.0) << "%\n";
-    std::cout << "  Mean Macro-F1:    " << std::setprecision(4) << cv.macro_f1_mean << " ± " << cv.macro_f1_std << "\n";
-    std::cout << "  Mean Weighted-F1: " << cv.weighted_f1_mean << " ± " << cv.weighted_f1_std << "\n";
-    std::cout << "  Mean Loss:        " << cv.loss_mean << " ± " << cv.loss_std << "\n";
+    std::cout << "  Mean Accuracy:    " << std::setprecision(2) << (cv.acc_mean * 100.0) << " +/- " << (cv.acc_std * 100.0) << "%\n";
+    std::cout << "  Mean Macro-F1:    " << std::setprecision(4) << cv.macro_f1_mean << " +/- " << cv.macro_f1_std << "\n";
+    std::cout << "  Mean Weighted-F1: " << cv.weighted_f1_mean << " +/- " << cv.weighted_f1_std << "\n";
+    std::cout << "  Mean Loss:        " << cv.loss_mean << " +/- " << cv.loss_std << "\n";
     std::cout << "-------------------------------------------------------------------\n\n";
 
     std::cout << "Overall Out-Of-Fold (OOF) Metrics:\n";
     std::cout << cv.oof_overall_eval.toString() << "\n";
 
-    // Append to results/cv_summary.csv
     std::ofstream cv_csv("results/cv_summary.csv", std::ios::app);
     if (cv_csv.is_open()) {
         cv_csv << "Stage 1,A<->B Swap Augmentation + TTA (V2 36-feat),"
@@ -292,399 +189,643 @@ int runStage1() {
     return 0;
 }
 
-int main(int argc, char* argv[]) {
-    if (argc > 1) {
-        std::string arg = argv[1];
-        if (arg == "--predict") {
-            return runInference(argc, argv);
-        } else if (arg == "--stage0" || arg == "--cv") {
-            return runStage0();
-        } else if (arg == "--stage1") {
-            return runStage1();
-        }
-    }
-    return runAllExperiments();
-}
-
-int runAllExperiments() {
+// ===================================================================
+//  Stage 2: Coreference Signal Features (V3 80-Features + Swap & TTA)
+// ===================================================================
+int runStage2() {
     std::cout << "===================================================================\n";
-    std::cout << " MAR / MSAR Antecedent Classifier: Research Reproduction Framework\n";
+    std::cout << " Stage 2: Coreference Signal Features (V3 80-Features + Swap Aug & TTA)\n";
     std::cout << "===================================================================\n\n";
 
-    std::string data_raw_dir = "data/raw";
-    std::string train_path = data_raw_dir + "/gap-development.tsv";
-    std::string val_path = data_raw_dir + "/gap-validation.tsv";
-    std::string test_path = data_raw_dir + "/gap-test.tsv";
+    std::string dev_path = "data/raw/gap-development.tsv";
+    std::string val_path = "data/raw/gap-validation.tsv";
 
-    // Create necessary directories
-    ensureDir("data");
-    ensureDir("data/raw");
-    ensureDir("data/processed");
-    ensureDir("models");
+    auto dev_records = msar::loadGapDataset(dev_path);
+    auto val_records = msar::loadGapDataset(val_path);
+    std::vector<msar::GapRecord> combined;
+    combined.insert(combined.end(), dev_records.begin(), dev_records.end());
+    combined.insert(combined.end(), val_records.begin(), val_records.end());
+
+    std::cout << "[Step 1] Loaded " << combined.size() << " samples.\n";
+    std::cout << "[Step 2] Running 5-Fold Stratified CV with 80-dim V3 Features...\n";
+
+    msar::TrainingConfig cfg;
+    cfg.experiment_name = "stage2_features_v3";
+    cfg.feature_dim = 80;
+    cfg.hidden_dim = 64;
+    cfg.output_dim = 3;
+    cfg.learning_rate = 0.001;
+    cfg.class_weight_alpha = 0.50;
+    cfg.l2_lambda = 0.0001;
+    cfg.batch_size = 32;
+    cfg.max_epochs = 500;
+    cfg.patience = 50;
+    cfg.seed = 42;
+
+    auto cv = msar::runCrossValidationV3(combined, cfg, 5, 42, true, true);
+
+    std::cout << "\n===================================================================\n";
+    std::cout << " STAGE 2 CROSS-VALIDATION RESULTS (N = 2,454, 5 FOLDS)\n";
+    std::cout << "===================================================================\n";
+    std::cout << std::fixed << std::setprecision(2);
+    for (size_t f = 0; f < cv.fold_results.size(); ++f) {
+        std::cout << "  Fold " << (f + 1) << ": Acc = " << (cv.fold_results[f].accuracy * 100.0) 
+                  << "% | Macro-F1 = " << std::setprecision(4) << cv.fold_results[f].macro_f1
+                  << " | Weighted-F1 = " << cv.fold_results[f].weighted_f1 << "\n";
+    }
+    std::cout << "-------------------------------------------------------------------\n";
+    std::cout << "  Mean Accuracy:    " << std::setprecision(2) << (cv.acc_mean * 100.0) << " +/- " << (cv.acc_std * 100.0) << "%\n";
+    std::cout << "  Mean Macro-F1:    " << std::setprecision(4) << cv.macro_f1_mean << " +/- " << cv.macro_f1_std << "\n";
+    std::cout << "  Mean Weighted-F1: " << cv.weighted_f1_mean << " +/- " << cv.weighted_f1_std << "\n";
+    std::cout << "  Mean Loss:        " << cv.loss_mean << " +/- " << cv.loss_std << "\n";
+    std::cout << "-------------------------------------------------------------------\n\n";
+
+    std::cout << "Overall Out-Of-Fold (OOF) Metrics:\n";
+    std::cout << cv.oof_overall_eval.toString() << "\n";
+
+    std::ofstream cv_csv("results/cv_summary.csv", std::ios::app);
+    if (cv_csv.is_open()) {
+        cv_csv << "Stage 2,V3 Clean Features (80-feat) + Page Subject + Syntactic Heuristics,"
+               << std::fixed << std::setprecision(4)
+               << cv.acc_mean << "," << cv.acc_std << ","
+               << cv.macro_f1_mean << "," << cv.macro_f1_std << ","
+               << cv.weighted_f1_mean << "," << cv.weighted_f1_std << ","
+               << cv.loss_mean << "," << cv.loss_std << "\n";
+    }
+
+    return 0;
+}
+
+// ===================================================================
+//  Stage 3: Model Capacity & Optimisation Grid Search
+// ===================================================================
+int runStage3() {
+    std::cout << "===================================================================\n";
+    std::cout << " Stage 3: Model Capacity & Optimisation Grid Search (V3 80-Features)\n";
+    std::cout << "===================================================================\n\n";
+
     ensureDir("results");
-    ensureDir("results/baseline");
-    ensureDir("results/experiments");
-    ensureDir("results/comparisons");
-    ensureDir("docs");
+    ensureDir("results/stage3");
+    ensureDir("models");
 
-    // Load datasets
-    std::cout << "[Step 1] Loading and verifying GAP coreference datasets...\n";
-    std::vector<msar::GapRecord> dev_records;
-    std::vector<msar::GapRecord> val_records;
-    std::vector<msar::GapRecord> test_records;
+    std::string dev_path = "data/raw/gap-development.tsv";
+    std::string val_path = "data/raw/gap-validation.tsv";
 
-    try {
-        dev_records = msar::loadGapDataset(train_path);
-        val_records = msar::loadGapDataset(val_path);
-        test_records = msar::loadGapDataset(test_path);
-    } catch (const std::exception& e) {
-        std::cerr << "Error loading dataset: " << e.what() << "\n";
+    auto dev_records = msar::loadGapDataset(dev_path);
+    auto val_records = msar::loadGapDataset(val_path);
+    std::vector<msar::GapRecord> combined;
+    combined.insert(combined.end(), dev_records.begin(), dev_records.end());
+    combined.insert(combined.end(), val_records.begin(), val_records.end());
+
+    auto stats = msar::computePartitionStats(combined);
+    std::cout << "[Step 1] Loaded " << stats.total_samples << " samples (A=" << stats.count_a
+              << ", B=" << stats.count_b << ", Neither=" << stats.count_neither << ")\n\n";
+
+    struct GridConfig {
+        std::string name;
+        size_t hidden_dim;
+        double lr;
+        double l2_lambda;
+        double alpha;
+    };
+
+    std::vector<GridConfig> grid = {
+        {"s3_h64_lr001_l2_0001",    64,  0.001,  0.0001, 0.50},
+        {"s3_h64_lr001_l2_0005",    64,  0.001,  0.0005, 0.50},
+        {"s3_h64_lr0005_l2_0001",   64,  0.0005, 0.0001, 0.50},
+        {"s3_h128_lr001_l2_0001",   128, 0.001,  0.0001, 0.50},
+        {"s3_h128_lr0005_l2_0001",  128, 0.0005, 0.0001, 0.50},
+    };
+
+    msar::CVMetrics best_cv;
+    std::string best_name;
+    double best_macro_f1 = -1.0;
+    GridConfig best_grid_cfg = grid[0];
+
+    std::ofstream grid_csv("results/stage3/grid_search_results.csv");
+    grid_csv << "Config,Hidden,LR,L2,Alpha,Accuracy_Mean,Accuracy_Std,MacroF1_Mean,MacroF1_Std,WeightedF1_Mean,WeightedF1_Std,Loss_Mean,Loss_Std\n";
+
+    for (size_t gi = 0; gi < grid.size(); ++gi) {
+        const auto& gc = grid[gi];
+        std::cout << "-------------------------------------------------------------------\n";
+        std::cout << "[Config " << (gi + 1) << "/" << grid.size() << "] " << gc.name 
+                  << " (Hidden=" << gc.hidden_dim << ", LR=" << gc.lr 
+                  << ", L2=" << gc.l2_lambda << ", Alpha=" << gc.alpha << ")\n";
+        std::cout << "-------------------------------------------------------------------\n";
+
+        msar::TrainingConfig cfg;
+        cfg.experiment_name = gc.name;
+        cfg.feature_dim = 80;
+        cfg.hidden_dim = gc.hidden_dim;
+        cfg.output_dim = 3;
+        cfg.learning_rate = gc.lr;
+        cfg.class_weight_alpha = gc.alpha;
+        cfg.l2_lambda = gc.l2_lambda;
+        cfg.batch_size = 32;
+        cfg.max_epochs = 500;
+        cfg.patience = 50;
+        cfg.seed = 42;
+
+        auto cv = msar::runCrossValidationV3(combined, cfg, 5, 42, true, true);
+
+        std::cout << "  Mean Accuracy:    " << std::fixed << std::setprecision(2) << (cv.acc_mean * 100.0) << " +/- " << (cv.acc_std * 100.0) << "%\n";
+        std::cout << "  Mean Macro-F1:    " << std::setprecision(4) << cv.macro_f1_mean << " +/- " << cv.macro_f1_std << "\n";
+        std::cout << "  Mean Weighted-F1: " << cv.weighted_f1_mean << " +/- " << cv.weighted_f1_std << "\n";
+        std::cout << "  Mean Loss:        " << cv.loss_mean << " +/- " << cv.loss_std << "\n\n";
+
+        grid_csv << gc.name << "," << gc.hidden_dim << "," << gc.lr << "," << gc.l2_lambda << "," << gc.alpha << ","
+                 << std::fixed << std::setprecision(4)
+                 << cv.acc_mean << "," << cv.acc_std << ","
+                 << cv.macro_f1_mean << "," << cv.macro_f1_std << ","
+                 << cv.weighted_f1_mean << "," << cv.weighted_f1_std << ","
+                 << cv.loss_mean << "," << cv.loss_std << "\n";
+        grid_csv.flush();
+
+        if (cv.macro_f1_mean > best_macro_f1) {
+            best_macro_f1 = cv.macro_f1_mean;
+            best_cv = cv;
+            best_name = gc.name;
+            best_grid_cfg = gc;
+        }
+    }
+
+    std::cout << "===================================================================\n";
+    std::cout << " STAGE 3 BEST CONFIGURATION: " << best_name << "\n";
+    std::cout << "===================================================================\n";
+    std::cout << "  Hidden: " << best_grid_cfg.hidden_dim << " | LR: " << best_grid_cfg.lr
+              << " | L2: " << best_grid_cfg.l2_lambda << " | Alpha: " << best_grid_cfg.alpha << "\n";
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "  Mean Accuracy:    " << (best_cv.acc_mean * 100.0) << " +/- " << (best_cv.acc_std * 100.0) << "%\n";
+    std::cout << std::setprecision(4);
+    std::cout << "  Mean Macro-F1:    " << best_cv.macro_f1_mean << " +/- " << best_cv.macro_f1_std << "\n";
+    std::cout << "  Mean Weighted-F1: " << best_cv.weighted_f1_mean << " +/- " << best_cv.weighted_f1_std << "\n";
+    std::cout << "  Mean Loss:        " << best_cv.loss_mean << " +/- " << best_cv.loss_std << "\n\n";
+    std::cout << "Overall OOF Metrics:\n";
+    std::cout << best_cv.oof_overall_eval.toString() << "\n";
+
+    std::ofstream best_cfg_file("results/stage3/best_config.txt");
+    best_cfg_file << best_name << "\n"
+                  << best_grid_cfg.hidden_dim << "\n"
+                  << best_grid_cfg.lr << "\n"
+                  << best_grid_cfg.l2_lambda << "\n"
+                  << best_grid_cfg.alpha << "\n";
+
+    std::ofstream cv_csv("results/cv_summary.csv", std::ios::app);
+    if (cv_csv.is_open()) {
+        cv_csv << "Stage 3," << best_name << " (best of grid search),"
+               << std::fixed << std::setprecision(4)
+               << best_cv.acc_mean << "," << best_cv.acc_std << ","
+               << best_cv.macro_f1_mean << "," << best_cv.macro_f1_std << ","
+               << best_cv.weighted_f1_mean << "," << best_cv.weighted_f1_std << ","
+               << best_cv.loss_mean << "," << best_cv.loss_std << "\n";
+    }
+
+    return 0;
+}
+
+// ===================================================================
+//  Stage 4: Decision-Rule Tuning (OOF Probability Calibration)
+// ===================================================================
+int runStage4() {
+    std::cout << "===================================================================\n";
+    std::cout << " Stage 4: Decision-Rule Tuning (Per-Class Probability Scaling)\n";
+    std::cout << "===================================================================\n\n";
+
+    ensureDir("results");
+    ensureDir("results/stage4");
+    ensureDir("models");
+
+    size_t best_hidden = 64;
+    double best_lr = 0.001;
+    double best_l2 = 0.0001;
+    double best_alpha = 0.50;
+    {
+        std::ifstream cfg_file("results/stage3/best_config.txt");
+        if (cfg_file.is_open()) {
+            std::string name;
+            std::getline(cfg_file, name);
+            cfg_file >> best_hidden >> best_lr >> best_l2 >> best_alpha;
+            std::cout << "[Info] Loaded Stage 3 best config: " << name 
+                      << " (H=" << best_hidden << ", LR=" << best_lr 
+                      << ", L2=" << best_l2 << ", Alpha=" << best_alpha << ")\n\n";
+        } else {
+            std::cout << "[Info] Using default optimal config (H=64, LR=0.001, L2=0.0001, Alpha=0.50)\n\n";
+        }
+    }
+
+    std::string dev_path = "data/raw/gap-development.tsv";
+    std::string val_path = "data/raw/gap-validation.tsv";
+    auto dev_records = msar::loadGapDataset(dev_path);
+    auto val_records = msar::loadGapDataset(val_path);
+    std::vector<msar::GapRecord> combined;
+    combined.insert(combined.end(), dev_records.begin(), dev_records.end());
+    combined.insert(combined.end(), val_records.begin(), val_records.end());
+
+    std::cout << "[Step 1] Running 5-fold CV to obtain calibrated OOF probability distributions...\n";
+
+    msar::TrainingConfig cfg;
+    cfg.experiment_name = "stage4_oof";
+    cfg.feature_dim = 80;
+    cfg.hidden_dim = best_hidden;
+    cfg.output_dim = 3;
+    cfg.learning_rate = best_lr;
+    cfg.class_weight_alpha = best_alpha;
+    cfg.l2_lambda = best_l2;
+    cfg.batch_size = 32;
+    cfg.max_epochs = 500;
+    cfg.patience = 50;
+    cfg.seed = 42;
+
+    auto cv = msar::runCrossValidationV3(combined, cfg, 5, 42, true, true);
+
+    std::cout << "  OOF Accuracy (before calibration): " << std::fixed << std::setprecision(2) 
+              << (cv.oof_overall_eval.accuracy * 100.0) << "%\n";
+    std::cout << "  OOF Macro-F1 (before calibration): " << std::setprecision(4) 
+              << cv.oof_overall_eval.macro_f1 << "\n\n";
+
+    std::cout << "[Step 2] Grid search over per-class scaling factors...\n";
+
+    std::vector<int> y_all(combined.size());
+    for (size_t i = 0; i < combined.size(); ++i) y_all[i] = combined[i].label;
+    auto class_weights = msar::computeClassWeights(y_all, best_alpha);
+
+    double best_scale_a = 1.0, best_scale_b = 1.0, best_scale_n = 1.0;
+    double best_cal_macro_f1 = cv.oof_overall_eval.macro_f1;
+
+    std::vector<double> scale_values = {0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30};
+    size_t total_combos = scale_values.size() * scale_values.size() * scale_values.size();
+
+    for (double sa : scale_values) {
+        for (double sb : scale_values) {
+            for (double sn : scale_values) {
+                std::vector<int> scaled_preds(combined.size());
+                std::vector<std::vector<double>> scaled_probs(combined.size(), std::vector<double>(3));
+
+                for (size_t i = 0; i < combined.size(); ++i) {
+                    scaled_probs[i][0] = cv.oof_probs[i][0] * sa;
+                    scaled_probs[i][1] = cv.oof_probs[i][1] * sb;
+                    scaled_probs[i][2] = cv.oof_probs[i][2] * sn;
+
+                    double sum = scaled_probs[i][0] + scaled_probs[i][1] + scaled_probs[i][2];
+                    if (sum > 0) {
+                        scaled_probs[i][0] /= sum;
+                        scaled_probs[i][1] /= sum;
+                        scaled_probs[i][2] /= sum;
+                    }
+
+                    int best_c = 0;
+                    if (scaled_probs[i][1] > scaled_probs[i][best_c]) best_c = 1;
+                    if (scaled_probs[i][2] > scaled_probs[i][best_c]) best_c = 2;
+                    scaled_preds[i] = best_c;
+                }
+
+                auto eval = msar::evaluatePredictions(y_all, scaled_preds, scaled_probs, class_weights);
+                if (eval.macro_f1 > best_cal_macro_f1) {
+                    best_cal_macro_f1 = eval.macro_f1;
+                    best_scale_a = sa;
+                    best_scale_b = sb;
+                    best_scale_n = sn;
+                }
+            }
+        }
+    }
+
+    std::cout << "  Tested " << total_combos << " scaling factor combinations.\n\n";
+
+    std::vector<int> final_preds(combined.size());
+    std::vector<std::vector<double>> final_probs(combined.size(), std::vector<double>(3));
+
+    for (size_t i = 0; i < combined.size(); ++i) {
+        final_probs[i][0] = cv.oof_probs[i][0] * best_scale_a;
+        final_probs[i][1] = cv.oof_probs[i][1] * best_scale_b;
+        final_probs[i][2] = cv.oof_probs[i][2] * best_scale_n;
+        double sum = final_probs[i][0] + final_probs[i][1] + final_probs[i][2];
+        if (sum > 0) {
+            final_probs[i][0] /= sum;
+            final_probs[i][1] /= sum;
+            final_probs[i][2] /= sum;
+        }
+        int best_c = 0;
+        if (final_probs[i][1] > final_probs[i][best_c]) best_c = 1;
+        if (final_probs[i][2] > final_probs[i][best_c]) best_c = 2;
+        final_preds[i] = best_c;
+    }
+
+    auto cal_eval = msar::evaluatePredictions(y_all, final_preds, final_probs, class_weights);
+
+    std::cout << "===================================================================\n";
+    std::cout << " STAGE 4 RESULTS: Decision-Rule Calibration\n";
+    std::cout << "===================================================================\n";
+    std::cout << "  Best Scale Factors: A=" << best_scale_a << ", B=" << best_scale_b << ", N=" << best_scale_n << "\n";
+    std::cout << "  Before calibration: Accuracy=" << std::fixed << std::setprecision(2) << (cv.oof_overall_eval.accuracy * 100.0) << "%, Macro-F1=" << std::setprecision(4) << cv.oof_overall_eval.macro_f1 << "\n";
+    std::cout << "  After  calibration: Accuracy=" << std::setprecision(2) << (cal_eval.accuracy * 100.0) << "%, Macro-F1=" << std::setprecision(4) << cal_eval.macro_f1 << "\n";
+    std::cout << "  Delta Accuracy: " << std::setprecision(2) << ((cal_eval.accuracy - cv.oof_overall_eval.accuracy) * 100.0) << " pp\n";
+    std::cout << "  Delta Macro-F1: " << std::setprecision(4) << (cal_eval.macro_f1 - cv.oof_overall_eval.macro_f1) << "\n\n";
+
+    std::cout << "Calibrated OOF Metrics:\n";
+    std::cout << cal_eval.toString() << "\n";
+
+    std::ofstream sf("results/stage4/scaling_factors.json");
+    sf << "{\n"
+       << "  \"scale_A\": " << best_scale_a << ",\n"
+       << "  \"scale_B\": " << best_scale_b << ",\n"
+       << "  \"scale_Neither\": " << best_scale_n << ",\n"
+       << "  \"oof_macro_f1_before\": " << cv.oof_overall_eval.macro_f1 << ",\n"
+       << "  \"oof_macro_f1_after\": " << cal_eval.macro_f1 << ",\n"
+       << "  \"oof_accuracy_before\": " << cv.oof_overall_eval.accuracy << ",\n"
+       << "  \"oof_accuracy_after\": " << cal_eval.accuracy << "\n"
+       << "}\n";
+
+    std::ofstream s4_cfg("results/stage4/best_config.txt");
+    s4_cfg << best_hidden << "\n" << best_lr << "\n" << best_l2 << "\n" << best_alpha << "\n"
+           << best_scale_a << "\n" << best_scale_b << "\n" << best_scale_n << "\n";
+
+    std::ofstream cv_csv("results/cv_summary.csv", std::ios::app);
+    if (cv_csv.is_open()) {
+        cv_csv << "Stage 4,Decision-Rule Calibration (A=" << best_scale_a << " B=" << best_scale_b << " N=" << best_scale_n << "),"
+               << std::fixed << std::setprecision(4)
+               << cal_eval.accuracy << "," << 0.0 << ","
+               << cal_eval.macro_f1 << "," << 0.0 << ","
+               << cal_eval.weighted_f1 << "," << 0.0 << ","
+               << cal_eval.weighted_loss << "," << 0.0 << "\n";
+    }
+
+    return 0;
+}
+
+// ===================================================================
+//  Stage 5: Final Test Evaluation (GAP Test Set N = 2,000)
+// ===================================================================
+int runStage5() {
+    std::cout << "===================================================================\n";
+    std::cout << " Stage 5: Final Test Evaluation (Train on Dev+Val, Eval on Test)\n";
+    std::cout << "===================================================================\n\n";
+
+    ensureDir("results");
+    ensureDir("results/stage5");
+    ensureDir("models");
+
+    size_t best_hidden = 64;
+    double best_lr = 0.001;
+    double best_l2 = 0.0001;
+    double best_alpha = 0.50;
+    double scale_a = 1.0, scale_b = 1.0, scale_n = 1.0;
+    {
+        std::ifstream cfg_file("results/stage4/best_config.txt");
+        if (cfg_file.is_open()) {
+            cfg_file >> best_hidden >> best_lr >> best_l2 >> best_alpha;
+            cfg_file >> scale_a >> scale_b >> scale_n;
+            std::cout << "[Info] Loaded config: H=" << best_hidden << ", LR=" << best_lr 
+                      << ", L2=" << best_l2 << ", Alpha=" << best_alpha 
+                      << ", Scale A=" << scale_a << ", B=" << scale_b << ", N=" << scale_n << "\n\n";
+        } else {
+            std::cout << "[Info] Using standard optimal config.\n\n";
+        }
+    }
+
+    std::string dev_path = "data/raw/gap-development.tsv";
+    std::string val_path = "data/raw/gap-validation.tsv";
+    std::string test_path = "data/raw/gap-test.tsv";
+
+    auto dev_records = msar::loadGapDataset(dev_path);
+    auto val_records = msar::loadGapDataset(val_path);
+    auto test_records = msar::loadGapDataset(test_path);
+
+    std::vector<msar::GapRecord> train_set;
+    train_set.insert(train_set.end(), dev_records.begin(), dev_records.end());
+    train_set.insert(train_set.end(), val_records.begin(), val_records.end());
+
+    auto train_stats = msar::computePartitionStats(train_set);
+    auto test_stats = msar::computePartitionStats(test_records);
+    std::cout << "[Step 1] Training set: " << train_stats.total_samples << " samples (A=" << train_stats.count_a
+              << ", B=" << train_stats.count_b << ", Neither=" << train_stats.count_neither << ")\n";
+    std::cout << "         Test set:     " << test_stats.total_samples << " samples (A=" << test_stats.count_a
+              << ", B=" << test_stats.count_b << ", Neither=" << test_stats.count_neither << ")\n\n";
+
+    std::cout << "[Step 2] Extracting 80-dim V3 representations...\n";
+    std::vector<std::vector<double>> X_train_raw, X_test_raw;
+    std::vector<int> y_train, y_test;
+
+    X_train_raw.reserve(train_set.size());
+    y_train.reserve(train_set.size());
+    for (const auto& r : train_set) {
+        X_train_raw.push_back(msar::extractFeaturesV3(r));
+        y_train.push_back(r.label);
+    }
+
+    X_test_raw.reserve(test_records.size());
+    y_test.reserve(test_records.size());
+    for (const auto& r : test_records) {
+        X_test_raw.push_back(msar::extractFeaturesV3(r));
+        y_test.push_back(r.label);
+    }
+
+    std::cout << "[Step 3] Applying A<->B swap augmentation on training data...\n";
+    std::vector<std::vector<double>> X_train_aug;
+    std::vector<int> y_train_aug;
+    X_train_aug.reserve(2 * X_train_raw.size());
+    y_train_aug.reserve(2 * X_train_raw.size());
+
+    for (size_t i = 0; i < X_train_raw.size(); ++i) {
+        X_train_aug.push_back(X_train_raw[i]);
+        y_train_aug.push_back(y_train[i]);
+
+        X_train_aug.push_back(msar::swapCandidatesVector(X_train_raw[i]));
+        int y_swapped = (y_train[i] == 0 ? 1 : (y_train[i] == 1 ? 0 : 2));
+        y_train_aug.push_back(y_swapped);
+    }
+    std::cout << "  Augmented training set: " << X_train_aug.size() << " samples\n\n";
+
+    std::cout << "[Step 4] Fitting feature standardizer on training data...\n";
+    msar::FeatureStandardizer scaler;
+    scaler.fit(X_train_aug);
+    scaler.transformInPlace(X_train_aug);
+
+    std::vector<std::vector<double>> X_test_std(X_test_raw.size());
+    for (size_t i = 0; i < X_test_raw.size(); ++i) {
+        X_test_std[i] = scaler.transformSingle(X_test_raw[i]);
+    }
+    scaler.save("models/standardizer_v3_final.txt");
+
+    // Partition training data into train (dev 2000) and early-stopping validation (val 454)
+    size_t n_val = val_records.size(); // 454
+    size_t n_dev = dev_records.size(); // 2000
+
+    std::vector<std::vector<double>> X_es_train, X_es_val;
+    std::vector<int> y_es_train, y_es_val;
+
+    for (size_t i = 0; i < n_dev; ++i) {
+        X_es_train.push_back(X_train_aug[2 * i]);
+        y_es_train.push_back(y_train_aug[2 * i]);
+        X_es_train.push_back(X_train_aug[2 * i + 1]);
+        y_es_train.push_back(y_train_aug[2 * i + 1]);
+    }
+    for (size_t i = n_dev; i < train_set.size(); ++i) {
+        X_es_val.push_back(X_train_aug[2 * i]);
+        y_es_val.push_back(y_train_aug[2 * i]);
+    }
+
+    std::cout << "[Step 5] Training final model (ES-Train=" << X_es_train.size() 
+              << ", ES-Val=" << X_es_val.size() << ")...\n";
+
+    msar::TrainingConfig train_cfg;
+    train_cfg.experiment_name = "stage5_final";
+    train_cfg.feature_dim = 80;
+    train_cfg.hidden_dim = best_hidden;
+    train_cfg.output_dim = 3;
+    train_cfg.learning_rate = best_lr;
+    train_cfg.class_weight_alpha = best_alpha;
+    train_cfg.l2_lambda = best_l2;
+    train_cfg.batch_size = 32;
+    train_cfg.max_epochs = 500;
+    train_cfg.patience = 50;
+    train_cfg.seed = 42;
+    train_cfg.use_tta = true;
+    train_cfg.checkpoint_path = "models/final_model.bin";
+    train_cfg.history_csv_path = "results/stage5/training_history.csv";
+
+    auto train_res = msar::trainModel(X_es_train, y_es_train, X_es_val, y_es_val, train_cfg);
+
+    std::cout << "  Best Epoch:      " << train_res.best_epoch << "\n";
+    std::cout << "  ES-Val Accuracy: " << std::fixed << std::setprecision(2) << (train_res.best_val_acc * 100.0) << "%\n";
+    std::cout << "  ES-Val Macro-F1: " << std::setprecision(4) << train_res.best_val_macro_f1 << "\n\n";
+
+    std::cout << "[Step 6] Evaluating on untouched GAP test set (N = " << test_records.size() << ")...\n\n";
+
+    msar::MultilayerPerceptron model(80, best_hidden, 3);
+    model.loadCheckpoint("models/final_model.bin");
+
+    std::vector<std::vector<double>> test_probs_raw;
+    auto test_preds_raw = msar::predictModel(model, X_test_std, test_probs_raw, true);
+    auto test_class_weights = msar::computeClassWeights(y_test, best_alpha);
+    auto test_eval_raw = msar::evaluatePredictions(y_test, test_preds_raw, test_probs_raw, test_class_weights);
+
+    std::vector<std::vector<double>> test_probs_cal = test_probs_raw;
+    std::vector<int> test_preds_cal(test_probs_cal.size());
+    for (size_t i = 0; i < test_probs_cal.size(); ++i) {
+        test_probs_cal[i][0] *= scale_a;
+        test_probs_cal[i][1] *= scale_b;
+        test_probs_cal[i][2] *= scale_n;
+        double sum = test_probs_cal[i][0] + test_probs_cal[i][1] + test_probs_cal[i][2];
+        if (sum > 0) {
+            test_probs_cal[i][0] /= sum;
+            test_probs_cal[i][1] /= sum;
+            test_probs_cal[i][2] /= sum;
+        }
+        int best_c = 0;
+        if (test_probs_cal[i][1] > test_probs_cal[i][best_c]) best_c = 1;
+        if (test_probs_cal[i][2] > test_probs_cal[i][best_c]) best_c = 2;
+        test_preds_cal[i] = best_c;
+    }
+    auto test_eval_cal = msar::evaluatePredictions(y_test, test_preds_cal, test_probs_cal, test_class_weights);
+
+    std::cout << "===================================================================\n";
+    std::cout << " STAGE 5: FINAL TEST SET RESULTS (N = 2,000)\n";
+    std::cout << "===================================================================\n\n";
+    std::cout << "--- Raw Inference (Without Calibration) ---\n";
+    std::cout << test_eval_raw.toString() << "\n";
+    std::cout << "--- Calibrated Inference (Scale A=" << scale_a << ", B=" << scale_b << ", N=" << scale_n << ") ---\n";
+    std::cout << test_eval_cal.toString() << "\n";
+
+    std::ofstream rf("results/stage5/final_test_report.md");
+    rf << "# Final Test Evaluation Report\n\n";
+    rf << "## Configuration\n";
+    rf << "- **Model**: MLP (80 -> " << best_hidden << " -> 3) with ReLU + Softmax\n";
+    rf << "- **Features**: Clean V3 (80-dim: 40 per candidate x 2)\n";
+    rf << "- **Training Data**: GAP Development (2000) + GAP Validation (454) = 2454 samples\n";
+    rf << "- **Augmentation**: A<->B Swap (2x training data) + TTA at inference\n";
+    rf << "- **Optimizer**: Adam (LR=" << best_lr << ", L2=" << best_l2 << ")\n";
+    rf << "- **Class Weighting**: Inverse-frequency^" << best_alpha << "\n";
+    rf << "- **Calibration Multipliers**: Scale A=" << scale_a << ", B=" << scale_b << ", Neither=" << scale_n << "\n";
+    rf << "- **Best Epoch**: " << train_res.best_epoch << "\n\n";
+
+    rf << "## Test Set Performance (N = 2,000)\n\n";
+    rf << "| Metric | Raw Inference | Calibrated Inference |\n";
+    rf << "|---|:---:|:---:|\n";
+    rf << "| **Accuracy** | **" << std::fixed << std::setprecision(2) << (test_eval_raw.accuracy * 100.0) << "%** | **"
+       << (test_eval_cal.accuracy * 100.0) << "%** |\n";
+    rf << "| **Macro-F1** | " << std::setprecision(4) << test_eval_raw.macro_f1 << " | " << test_eval_cal.macro_f1 << " |\n";
+    rf << "| **Weighted-F1** | " << test_eval_raw.weighted_f1 << " | " << test_eval_cal.weighted_f1 << " |\n";
+    rf << "| **Weighted Loss** | " << test_eval_raw.weighted_loss << " | " << test_eval_cal.weighted_loss << " |\n\n";
+
+    rf << "### Per-Class Breakdown (Raw Inference)\n";
+    rf << "| Class | Precision | Recall | F1-Score | Support |\n";
+    rf << "|---|---|---|---|---|\n";
+    const char* cnames[3] = {"A (0)", "B (1)", "Neither (2)"};
+    for (int c = 0; c < 3; ++c) {
+        rf << "| " << cnames[c] << " | " << std::fixed << std::setprecision(4)
+           << test_eval_raw.class_metrics[c].precision << " | "
+           << test_eval_raw.class_metrics[c].recall << " | "
+           << test_eval_raw.class_metrics[c].f1 << " | "
+           << test_eval_raw.class_metrics[c].support << " |\n";
+    }
+
+    rf << "\n### Confusion Matrix (Raw Inference)\n```\n";
+    rf << "                 Predicted\n";
+    rf << "                 A        B        Neither\n";
+    rf << "Actual A         " << std::setw(8) << test_eval_raw.confusion_matrix[0][0] << " "
+                              << std::setw(8) << test_eval_raw.confusion_matrix[0][1] << " "
+                              << std::setw(8) << test_eval_raw.confusion_matrix[0][2] << "\n";
+    rf << "Actual B         " << std::setw(8) << test_eval_raw.confusion_matrix[1][0] << " "
+                              << std::setw(8) << test_eval_raw.confusion_matrix[1][1] << " "
+                              << std::setw(8) << test_eval_raw.confusion_matrix[1][2] << "\n";
+    rf << "Actual Neither   " << std::setw(8) << test_eval_raw.confusion_matrix[2][0] << " "
+                              << std::setw(8) << test_eval_raw.confusion_matrix[2][1] << " "
+                              << std::setw(8) << test_eval_raw.confusion_matrix[2][2] << "\n";
+    rf << "```\n";
+    rf.close();
+
+    std::ofstream cv_csv("results/cv_summary.csv", std::ios::app);
+    if (cv_csv.is_open()) {
+        cv_csv << "Stage 5 (Test - Raw),Final Test Set Evaluation (Raw),"
+               << std::fixed << std::setprecision(4)
+               << test_eval_raw.accuracy << ",0,"
+               << test_eval_raw.macro_f1 << ",0,"
+               << test_eval_raw.weighted_f1 << ",0,"
+               << test_eval_raw.weighted_loss << ",0\n";
+        cv_csv << "Stage 5 (Test - Calibrated),Final Test Set Evaluation (Calibrated),"
+               << test_eval_cal.accuracy << ",0,"
+               << test_eval_cal.macro_f1 << ",0,"
+               << test_eval_cal.weighted_f1 << ",0,"
+               << test_eval_cal.weighted_loss << ",0\n";
+    }
+
+    std::cout << "Final test report written to results/stage5/final_test_report.md\n";
+    std::cout << "Model checkpoint saved to models/final_model.bin\n";
+    std::cout << "Standardizer saved to models/standardizer_v3_final.txt\n";
+
+    return 0;
+}
+
+// ===================================================================
+//  Main Entry Point
+// ===================================================================
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Usage: msar_reproduce.exe --stage0|--stage1|--stage2|--stage3|--stage4|--stage5|--all\n";
         return 1;
     }
 
-    auto dev_stats = msar::computePartitionStats(dev_records);
-    auto val_stats = msar::computePartitionStats(val_records);
-    auto test_stats = msar::computePartitionStats(test_records);
+    std::string flag = argv[1];
 
-    std::cout << "  Development: " << dev_stats.total_samples << " samples (A=" << dev_stats.count_a 
-              << ", B=" << dev_stats.count_b << ", Neither=" << dev_stats.count_neither << ")\n";
-    std::cout << "  Validation:  " << val_stats.total_samples << " samples (A=" << val_stats.count_a 
-              << ", B=" << val_stats.count_b << ", Neither=" << val_stats.count_neither << ")\n";
-    std::cout << "  Test:        " << test_stats.total_samples << " samples (A=" << test_stats.count_a 
-              << ", B=" << test_stats.count_b << ", Neither=" << test_stats.count_neither << ")\n";
-
-    // Extract V1 (12 features)
-    std::cout << "\n[Step 2] Extracting 12-feature representations (Baseline V1)...\n";
-    std::vector<std::vector<double>> X_dev_v1, X_val_v1;
-    std::vector<int> y_dev, y_val;
-
-    for (const auto& r : dev_records) {
-        X_dev_v1.push_back(msar::extractFeaturesV1(r));
-        y_dev.push_back(r.label);
-    }
-    for (const auto& r : val_records) {
-        X_val_v1.push_back(msar::extractFeaturesV1(r));
-        y_val.push_back(r.label);
+    if (flag == "--stage0") return runStage0();
+    if (flag == "--stage1") return runStage1();
+    if (flag == "--stage2") return runStage2();
+    if (flag == "--stage3") return runStage3();
+    if (flag == "--stage4") return runStage4();
+    if (flag == "--stage5") return runStage5();
+    if (flag == "--all") {
+        int r;
+        r = runStage0(); if (r != 0) return r;
+        r = runStage1(); if (r != 0) return r;
+        r = runStage2(); if (r != 0) return r;
+        r = runStage3(); if (r != 0) return r;
+        r = runStage4(); if (r != 0) return r;
+        r = runStage5(); if (r != 0) return r;
+        return 0;
     }
 
-    // Extract V2 (36 features)
-    std::cout << "[Step 3] Extracting 36-feature representations (Expanded V2)...\n";
-    std::vector<std::vector<double>> X_dev_v2, X_val_v2;
-
-    for (const auto& r : dev_records) {
-        X_dev_v2.push_back(msar::extractFeaturesV2(r));
-    }
-    for (const auto& r : val_records) {
-        X_val_v2.push_back(msar::extractFeaturesV2(r));
-    }
-
-    // Standardizers (fitted on development / training set only)
-    std::cout << "[Step 4] Fitting feature standardizers on development partition only...\n";
-    msar::FeatureStandardizer scaler_v1;
-    scaler_v1.fit(X_dev_v1);
-    scaler_v1.transformInPlace(X_dev_v1);
-    scaler_v1.transformInPlace(X_val_v1);
-    scaler_v1.save("models/standardizer_v1.txt");
-
-    msar::FeatureStandardizer scaler_v2;
-    scaler_v2.fit(X_dev_v2);
-    scaler_v2.transformInPlace(X_dev_v2);
-    scaler_v2.transformInPlace(X_val_v2);
-    scaler_v2.save("models/standardizer_v2.txt");
-
-    // Feature correlation analysis on V2 dev set
-    std::cout << "[Step 5] Analyzing feature correlations on development data (Experiment 6 prep)...\n";
-    auto corr_analysis = msar::analyzeFeatureCorrelations(X_dev_v2);
-    std::cout << "  Pairs with |r| >= 0.90: " << corr_analysis.pairs_ge_90.size() << "\n";
-    std::cout << "  Pairs with |r| >= 0.95: " << corr_analysis.pairs_ge_95.size() << "\n";
-    std::cout << "  Pairs with |r| >= 0.99: " << corr_analysis.pairs_ge_99.size() << "\n";
-
-    // Save correlation report
-    {
-        std::ofstream corr_out("results/experiments/correlation_report.txt");
-        corr_out << "Feature Correlation Audit (GAP Development Set):\n";
-        corr_out << "Total Features: 36\n";
-        corr_out << "Pairs with |r| >= 0.90: " << corr_analysis.pairs_ge_90.size() << "\n";
-        corr_out << "Pairs with |r| >= 0.95: " << corr_analysis.pairs_ge_95.size() << "\n";
-        corr_out << "Pairs with |r| >= 0.99: " << corr_analysis.pairs_ge_99.size() << "\n\n";
-        corr_out << "Top Correlated Feature Pairs (|r| >= 0.90):\n";
-        corr_out << "---------------------------------------------------------\n";
-        for (const auto& cp : corr_analysis.pairs_ge_90) {
-            corr_out << "Feature " << std::setw(2) << cp.feat_i << " <-> Feature " 
-                     << std::setw(2) << cp.feat_j << " : r = " << std::fixed << std::setprecision(4) << cp.r << "\n";
-        }
-    }
-
-    // 30-feature reduced dataset for Exp 6
-    auto X_dev_v2_reduced = msar::applyFeatureReduction(X_dev_v2, corr_analysis.retained_features);
-    auto X_val_v2_reduced = msar::applyFeatureReduction(X_val_v2, corr_analysis.retained_features);
-
-    std::vector<msar::TrainingResult> all_results;
-
-    // Experiment 1: 12-feature baseline
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 1: Original 12-feature Baseline\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp1_baseline_12feat";
-        cfg.feature_dim = 12;
-        cfg.hidden_dim = 32;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.001;
-        cfg.class_weight_alpha = 0.50;
-        cfg.checkpoint_path = "models/model_exp1_baseline.bin";
-        cfg.history_csv_path = "results/baseline/exp1_history.csv";
-
-        auto res = msar::trainModel(X_dev_v1, y_dev, X_val_v1, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/baseline/exp1_result.json", res, "12 features (V1)", "12 -> 32 -> 3 MLP");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Experiment 2: V2, Inverse-frequency class weighting (alpha = 1.0)
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 2: 36-feature V2, Inverse-Frequency Weighting (alpha=1.0)\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp2_v2_inv_freq_alpha100";
-        cfg.feature_dim = 36;
-        cfg.hidden_dim = 32;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.001;
-        cfg.class_weight_alpha = 1.00;
-        cfg.checkpoint_path = "models/model_exp2_inv_freq.bin";
-        cfg.history_csv_path = "results/experiments/exp2_history.csv";
-
-        auto res = msar::trainModel(X_dev_v2, y_dev, X_val_v2, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/experiments/exp2_result.json", res, "36 features (V2)", "36 -> 32 -> 3 MLP");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Experiment 3: Reduced learning rate (lr = 0.0003)
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 3: Reduced Learning Rate (lr=0.0003, alpha=1.0)\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp3_reduced_lr_0003";
-        cfg.feature_dim = 36;
-        cfg.hidden_dim = 32;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.0003;
-        cfg.class_weight_alpha = 1.00;
-        cfg.checkpoint_path = "models/model_exp3_reduced_lr.bin";
-        cfg.history_csv_path = "results/experiments/exp3_history.csv";
-
-        auto res = msar::trainModel(X_dev_v2, y_dev, X_val_v2, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/experiments/exp3_result.json", res, "36 features (V2)", "36 -> 32 -> 3 MLP");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Experiment 4: Square-root class weighting (alpha = 0.50, lr = 0.001) - BEST MODEL
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 4: Square-Root Class Weighting (alpha=0.50, lr=0.001) [Target Best]\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp4_best_sqrt_alpha050";
-        cfg.feature_dim = 36;
-        cfg.hidden_dim = 32;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.001;
-        cfg.class_weight_alpha = 0.50;
-        cfg.checkpoint_path = "models/model_exp4_best.bin";
-        cfg.history_csv_path = "results/experiments/exp4_history.csv";
-
-        auto res = msar::trainModel(X_dev_v2, y_dev, X_val_v2, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/experiments/exp4_result.json", res, "36 features (V2)", "36 -> 32 -> 3 MLP");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Experiment 5: Class-weight exponent 0.65
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 5: Class-Weight Exponent 0.65\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp5_class_weight_alpha065";
-        cfg.feature_dim = 36;
-        cfg.hidden_dim = 32;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.001;
-        cfg.class_weight_alpha = 0.65;
-        cfg.checkpoint_path = "models/model_exp5_alpha065.bin";
-        cfg.history_csv_path = "results/experiments/exp5_history.csv";
-
-        auto res = msar::trainModel(X_dev_v2, y_dev, X_val_v2, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/experiments/exp5_result.json", res, "36 features (V2)", "36 -> 32 -> 3 MLP");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Experiment 6: Feature correlation reduced model (30 features)
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 6: Feature Correlation Ablation (30 features)\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp6_reduced_30feat";
-        cfg.feature_dim = 30;
-        cfg.hidden_dim = 32;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.001;
-        cfg.class_weight_alpha = 0.50;
-        cfg.checkpoint_path = "models/model_exp6_reduced.bin";
-        cfg.history_csv_path = "results/experiments/exp6_history.csv";
-
-        auto res = msar::trainModel(X_dev_v2_reduced, y_dev, X_val_v2_reduced, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/experiments/exp6_result.json", res, "30 features (Ablated V2)", "30 -> 32 -> 3 MLP");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Experiment 7: Larger Hidden Layer (hidden = 64)
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 7: Larger Hidden Layer (hidden=64)\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp7_hidden64";
-        cfg.feature_dim = 36;
-        cfg.hidden_dim = 64;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.001;
-        cfg.class_weight_alpha = 0.50;
-        cfg.checkpoint_path = "models/model_exp7_hidden64.bin";
-        cfg.history_csv_path = "results/experiments/exp7_history.csv";
-
-        auto res = msar::trainModel(X_dev_v2, y_dev, X_val_v2, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/experiments/exp7_result.json", res, "36 features (V2)", "36 -> 64 -> 3 MLP");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Experiment 8: L2 Regularization (lambda = 0.0001)
-    std::cout << "\n-------------------------------------------------------------------\n";
-    std::cout << "Running Experiment 8: L2 Regularization (lambda=0.0001)\n";
-    std::cout << "-------------------------------------------------------------------\n";
-    {
-        msar::TrainingConfig cfg;
-        cfg.experiment_name = "exp8_l2_reg_00001";
-        cfg.feature_dim = 36;
-        cfg.hidden_dim = 32;
-        cfg.output_dim = 3;
-        cfg.learning_rate = 0.001;
-        cfg.class_weight_alpha = 0.50;
-        cfg.l2_lambda = 0.0001;
-        cfg.checkpoint_path = "models/model_exp8_l2.bin";
-        cfg.history_csv_path = "results/experiments/exp8_history.csv";
-
-        auto res = msar::trainModel(X_dev_v2, y_dev, X_val_v2, y_val, cfg);
-        all_results.push_back(res);
-        saveExperimentJson("results/experiments/exp8_result.json", res, "36 features (V2)", "36 -> 32 -> 3 MLP (L2=1e-4)");
-        std::cout << "  Best Epoch: " << res.best_epoch << " | Val Acc: " << (res.best_val_acc * 100.0) 
-                  << "% | Macro-F1: " << res.best_val_macro_f1 << " | Val Loss: " << res.best_val_loss << "\n";
-    }
-
-    // Identify and save Best Model overall (by highest macro-F1, tie breaker: lower val loss)
-    size_t best_idx = 0;
-    for (size_t i = 1; i < all_results.size(); ++i) {
-        if (all_results[i].best_val_macro_f1 > all_results[best_idx].best_val_macro_f1 + 1e-6) {
-            best_idx = i;
-        } else if (std::abs(all_results[i].best_val_macro_f1 - all_results[best_idx].best_val_macro_f1) <= 1e-6 &&
-                   all_results[i].best_val_loss < all_results[best_idx].best_val_loss) {
-            best_idx = i;
-        }
-    }
-
-    std::cout << "\n===================================================================\n";
-    std::cout << " MODEL SELECTION & COMPARISON SUMMARY\n";
-    std::cout << "===================================================================\n";
-    std::cout << "Selected Best Experiment: " << all_results[best_idx].config.experiment_name << "\n";
-    std::cout << "Validation Accuracy: " << (all_results[best_idx].best_val_acc * 100.0) << "%\n";
-    std::cout << "Validation Macro-F1: " << all_results[best_idx].best_val_macro_f1 << "\n";
-    std::cout << "Weighted Val Loss:   " << all_results[best_idx].best_val_loss << "\n";
-    std::cout << "Best Epoch:          " << all_results[best_idx].best_epoch << "\n\n";
-
-    std::cout << all_results[best_idx].final_val_eval.toString() << "\n";
-
-    // Save final best model checkpoint & standardizer
-    {
-        std::ifstream src(all_results[best_idx].config.checkpoint_path, std::ios::binary);
-        std::ofstream dst("models/best_model.bin", std::ios::binary);
-        if (src && dst) dst << src.rdbuf();
-    }
-
-    // Historical comparison reference metrics
-    struct RefMetric {
-        std::string name;
-        double ref_acc;
-        double ref_f1;
-    };
-    std::vector<RefMetric> ref_metrics = {
-        {"Exp 1 (12-feat Baseline)", 54.85, 0.4900},
-        {"Exp 2 (V2, alpha=1.00)",   56.17, 0.5226},
-        {"Exp 3 (Reduced LR)",       55.95, 0.5143},
-        {"Exp 4 (Sqrt Weighting)",   63.00, 0.5604},
-        {"Exp 5 (Alpha=0.65)",       62.56, 0.5606},
-        {"Exp 6 (Correlation Red.)", 59.91, 0.5187},
-        {"Exp 7 (Hidden=64)",        60.13, 0.5315},
-        {"Exp 8 (L2 Reg)",           63.00, 0.5604}
-    };
-
-    // Save comparison table CSV
-    std::ofstream csv_cmp("results/comparisons/experiment_comparison.csv");
-    csv_cmp << "Experiment,Features,Hidden,LR,Alpha,L2,Best_Epoch,Reprod_Acc,Ref_Acc,Reprod_MacroF1,Ref_MacroF1,Reprod_ValLoss\n";
-    for (size_t i = 0; i < all_results.size(); ++i) {
-        const auto& r = all_results[i];
-        csv_cmp << r.config.experiment_name << ","
-                << r.config.feature_dim << ","
-                << r.config.hidden_dim << ","
-                << r.config.learning_rate << ","
-                << r.config.class_weight_alpha << ","
-                << r.config.l2_lambda << ","
-                << r.best_epoch << ","
-                << std::fixed << std::setprecision(2) << (r.best_val_acc * 100.0) << "%,"
-                << ref_metrics[i].ref_acc << "%,"
-                << std::setprecision(4) << r.best_val_macro_f1 << ","
-                << ref_metrics[i].ref_f1 << ","
-                << r.best_val_loss << "\n";
-    }
-
-    // Save comparison Markdown table
-    std::ofstream md_cmp("results/comparisons/experiment_comparison.md");
-    md_cmp << "# Experiment Comparison: Historical Reference vs. Reproduced Baseline\n\n";
-    md_cmp << "| Experiment | Features | Hidden | LR | Alpha | L2 | Best Epoch | Reprod. Acc | Ref. Acc | Reprod. Macro-F1 | Ref. Macro-F1 | Reprod. Loss |\n";
-    md_cmp << "|---|---|---|---|---|---|---|---|---|---|---|---|\n";
-    for (size_t i = 0; i < all_results.size(); ++i) {
-        const auto& r = all_results[i];
-        md_cmp << "| " << r.config.experiment_name << " | "
-               << r.config.feature_dim << " | "
-               << r.config.hidden_dim << " | "
-               << r.config.learning_rate << " | "
-               << r.config.class_weight_alpha << " | "
-               << r.config.l2_lambda << " | "
-               << r.best_epoch << " | "
-               << std::fixed << std::setprecision(2) << (r.best_val_acc * 100.0) << "% | "
-               << ref_metrics[i].ref_acc << "% | "
-               << std::setprecision(4) << r.best_val_macro_f1 << " | "
-               << ref_metrics[i].ref_f1 << " | "
-               << r.best_val_loss << " |\n";
-    }
-
-    std::cout << "\nAll experiments completed successfully!\n";
-    std::cout << "Reports saved to results/comparisons/experiment_comparison.csv and .md\n";
-    return 0;
+    std::cerr << "Unknown flag: " << flag << "\n";
+    std::cerr << "Use --stage0, --stage1, --stage2, --stage3, --stage4, --stage5, or --all\n";
+    return 1;
 }

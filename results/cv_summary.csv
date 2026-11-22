@@ -1,3 +1,8 @@
 Stage,Description,Accuracy_Mean,Accuracy_Std,MacroF1_Mean,MacroF1_Std,WeightedF1_Mean,WeightedF1_Std,Loss_Mean,Loss_Std
-Stage 0,Baseline V2 36-feat MLP,0.6406,0.0179,0.5771,0.0198,0.6396,0.0166,0.9189,0.0294
+Stage 0,Baseline V2 36-feat MLP (5-Fold CV),0.6406,0.0179,0.5771,0.0198,0.6396,0.0166,0.9189,0.0294
 Stage 1,A<->B Swap Augmentation + TTA (V2 36-feat),0.6438,0.0120,0.5848,0.0146,0.6425,0.0102,0.8941,0.0343
+Stage 2,V3 Clean Features (80-feat) + Page Subject + Syntactic Heuristics,0.7001,0.0062,0.6507,0.0117,0.7010,0.0049,0.7821,0.0457
+Stage 3,s3_h64_lr0005_l2_0001 (Best Capacity & Optimisation Config),0.7046,0.0099,0.6558,0.0139,0.7058,0.0081,0.7769,0.0427
+Stage 4,Decision-Rule Calibration (A=0.85 B=0.90 N=0.90),0.7050,0.0000,0.6561,0.0000,0.7059,0.0000,0.7770,0.0000
+Stage 5 (Test - Raw),Final Test Set Evaluation (Raw Inference),0.6975,0.0000,0.6540,0.0000,0.6983,0.0000,0.7209,0.0000
+Stage 5 (Test - Calibrated),Final Test Set Evaluation (Calibrated Decision Rules),0.6975,0.0000,0.6554,0.0000,0.6982,0.0000,0.7217,0.0000

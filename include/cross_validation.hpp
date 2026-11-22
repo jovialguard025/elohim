@@ -8,6 +8,7 @@
 #include "evaluation.hpp"
 #include "training.hpp"
 #include "mention_ranker.hpp"
+#include "features_v3.hpp"
 
 #include <vector>
 #include <string>
@@ -176,6 +177,114 @@ inline CVMetrics runCrossValidation(
     cv.loss_std = std::sqrt(loss_var / k);
 
     // Compute overall OOF evaluation
+    std::vector<int> y_all(n);
+    for (size_t i = 0; i < n; ++i) y_all[i] = dataset[i].label;
+    auto class_weights = computeClassWeights(y_all, base_config.class_weight_alpha);
+    cv.oof_overall_eval = evaluatePredictions(y_all, cv.oof_predictions, cv.oof_probs, class_weights);
+
+    return cv;
+}
+
+inline CVMetrics runCrossValidationV3(
+    const std::vector<GapRecord>& dataset,
+    const TrainingConfig& base_config,
+    size_t k = 5,
+    unsigned int cv_seed = 42,
+    bool use_swap_aug = true,
+    bool use_tta = true)
+{
+    CVMetrics cv;
+    size_t n = dataset.size();
+    cv.oof_predictions.assign(n, -1);
+    cv.oof_probs.assign(n, std::vector<double>(3, 0.0));
+
+    auto folds = createStratifiedFolds(dataset, k, cv_seed);
+
+    for (size_t f = 0; f < k; ++f) {
+        const auto& fold = folds[f];
+        size_t n_train = fold.train_indices.size();
+        size_t n_val = fold.val_indices.size();
+
+        // 1. Extract features directly without target-leaking lexicon
+        std::vector<std::vector<double>> X_train;
+        std::vector<int> y_train;
+        X_train.reserve(use_swap_aug ? 2 * n_train : n_train);
+        y_train.reserve(use_swap_aug ? 2 * n_train : n_train);
+
+        for (size_t i = 0; i < n_train; ++i) {
+            size_t idx = fold.train_indices[i];
+            auto feat = extractFeaturesV3(dataset[idx]);
+            int label = dataset[idx].label;
+
+            X_train.push_back(feat);
+            y_train.push_back(label);
+
+            if (use_swap_aug) {
+                X_train.push_back(swapCandidatesVector(feat));
+                int y_swapped = (label == 0 ? 1 : (label == 1 ? 0 : 2));
+                y_train.push_back(y_swapped);
+            }
+        }
+
+        std::vector<std::vector<double>> X_val(n_val);
+        std::vector<int> y_val(n_val);
+        for (size_t i = 0; i < n_val; ++i) {
+            size_t idx = fold.val_indices[i];
+            X_val[i] = extractFeaturesV3(dataset[idx]);
+            y_val[i] = dataset[idx].label;
+        }
+
+        // 3. Fit standardizer ONLY on training fold
+        FeatureStandardizer scaler;
+        scaler.fit(X_train);
+        scaler.transformInPlace(X_train);
+        scaler.transformInPlace(X_val);
+
+        // 4. Configure training
+        TrainingConfig fold_config = base_config;
+        fold_config.feature_dim = X_train[0].size();
+        fold_config.use_tta = use_tta;
+        fold_config.experiment_name = base_config.experiment_name + "_fold" + std::to_string(f);
+        fold_config.checkpoint_path = "models/temp_fold_v3_" + std::to_string(f) + ".bin";
+        fold_config.history_csv_path = "";
+
+        auto res = trainModel(X_train, y_train, X_val, y_val, fold_config);
+        cv.fold_results.push_back(res.final_val_eval);
+
+        for (size_t i = 0; i < n_val; ++i) {
+            size_t orig_idx = fold.val_indices[i];
+            cv.oof_predictions[orig_idx] = res.val_preds[i];
+            cv.oof_probs[orig_idx] = res.val_probs[i];
+        }
+
+        std::remove(fold_config.checkpoint_path.c_str());
+    }
+
+    // Compute mean and std across folds
+    double acc_sum = 0.0, f1_sum = 0.0, wf1_sum = 0.0, loss_sum = 0.0;
+    for (const auto& fr : cv.fold_results) {
+        acc_sum += fr.accuracy;
+        f1_sum += fr.macro_f1;
+        wf1_sum += fr.weighted_f1;
+        loss_sum += fr.weighted_loss;
+    }
+    cv.acc_mean = acc_sum / k;
+    cv.macro_f1_mean = f1_sum / k;
+    cv.weighted_f1_mean = wf1_sum / k;
+    cv.loss_mean = loss_sum / k;
+
+    double acc_var = 0.0, f1_var = 0.0, wf1_var = 0.0, loss_var = 0.0;
+    for (const auto& fr : cv.fold_results) {
+        acc_var += (fr.accuracy - cv.acc_mean) * (fr.accuracy - cv.acc_mean);
+        f1_var += (fr.macro_f1 - cv.macro_f1_mean) * (fr.macro_f1 - cv.macro_f1_mean);
+        wf1_var += (fr.weighted_f1 - cv.weighted_f1_mean) * (fr.weighted_f1 - cv.weighted_f1_mean);
+        loss_var += (fr.weighted_loss - cv.loss_mean) * (fr.weighted_loss - cv.loss_mean);
+    }
+    cv.acc_std = std::sqrt(acc_var / k);
+    cv.macro_f1_std = std::sqrt(f1_var / k);
+    cv.weighted_f1_std = std::sqrt(wf1_var / k);
+    cv.loss_std = std::sqrt(loss_var / k);
+
     std::vector<int> y_all(n);
     for (size_t i = 0; i < n; ++i) y_all[i] = dataset[i].label;
     auto class_weights = computeClassWeights(y_all, base_config.class_weight_alpha);
