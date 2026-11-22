@@ -29,6 +29,7 @@ struct TrainingConfig {
     unsigned int seed = 42;
     std::string checkpoint_path = "";
     std::string history_csv_path = "";
+    bool use_tta = false;
 };
 
 struct EpochRecord {
@@ -100,6 +101,47 @@ inline double computeEpochLoss(
     return weight_sum > 0.0 ? (total_loss / weight_sum) : 0.0;
 }
 
+inline std::vector<double> swapCandidatesVector(const std::vector<double>& x) {
+    size_t d = x.size();
+    size_t half = d / 2;
+    std::vector<double> swapped(d);
+    for (size_t i = 0; i < half; ++i) {
+        swapped[i] = x[half + i];
+        swapped[half + i] = x[i];
+    }
+    return swapped;
+}
+
+inline std::vector<int> predictModel(
+    const MultilayerPerceptron& model,
+    const std::vector<std::vector<double>>& X,
+    std::vector<std::vector<double>>& probs,
+    bool use_tta = false)
+{
+    if (!use_tta) {
+        return model.predict(X, probs);
+    }
+    std::vector<int> preds(X.size());
+    probs.resize(X.size(), std::vector<double>(3));
+    std::vector<double> h_orig, p_orig, h_swap, p_swap;
+
+    for (size_t i = 0; i < X.size(); ++i) {
+        auto x_swap = swapCandidatesVector(X[i]);
+        model.forward(X[i], h_orig, p_orig);
+        model.forward(x_swap, h_swap, p_swap);
+
+        probs[i][0] = 0.5 * (p_orig[0] + p_swap[1]);
+        probs[i][1] = 0.5 * (p_orig[1] + p_swap[0]);
+        probs[i][2] = 0.5 * (p_orig[2] + p_swap[2]);
+
+        int best_c = 0;
+        if (probs[i][1] > probs[i][best_c]) best_c = 1;
+        if (probs[i][2] > probs[i][best_c]) best_c = 2;
+        preds[i] = best_c;
+    }
+    return preds;
+}
+
 inline TrainingResult trainModel(
     const std::vector<std::vector<double>>& X_train,
     const std::vector<int>& y_train,
@@ -155,7 +197,7 @@ inline TrainingResult trainModel(
         double train_loss = computeEpochLoss(model, X_train, y_train, result.class_weights);
 
         std::vector<std::vector<double>> val_probs;
-        std::vector<int> val_preds = model.predict(X_val, val_probs);
+        std::vector<int> val_preds = predictModel(model, X_val, val_probs, config.use_tta);
         EvaluationResult val_eval = evaluatePredictions(y_val, val_preds, val_probs, result.class_weights);
 
         EpochRecord ep_rec = {epoch, train_loss, val_eval.weighted_loss, val_eval.accuracy, val_eval.macro_f1};
@@ -190,7 +232,7 @@ inline TrainingResult trainModel(
 
     // Final evaluation on validation set using restored best checkpoint
     std::vector<std::vector<double>> best_val_probs;
-    std::vector<int> best_val_preds = model.predict(X_val, best_val_probs);
+    std::vector<int> best_val_preds = predictModel(model, X_val, best_val_probs, config.use_tta);
     result.val_preds = best_val_preds;
     result.val_probs = best_val_probs;
     result.final_val_eval = evaluatePredictions(y_val, best_val_preds, best_val_probs, result.class_weights);

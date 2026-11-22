@@ -7,6 +7,7 @@
 #include "mlp.hpp"
 #include "evaluation.hpp"
 #include "training.hpp"
+#include "mention_ranker.hpp"
 
 #include <vector>
 #include <string>
@@ -80,7 +81,9 @@ inline CVMetrics runCrossValidation(
     const std::vector<std::vector<double>>& raw_features,
     const TrainingConfig& base_config,
     size_t k = 5,
-    unsigned int cv_seed = 42)
+    unsigned int cv_seed = 42,
+    bool use_swap_aug = false,
+    bool use_tta = false)
 {
     CVMetrics cv;
     size_t n = dataset.size();
@@ -94,12 +97,22 @@ inline CVMetrics runCrossValidation(
         size_t n_train = fold.train_indices.size();
         size_t n_val = fold.val_indices.size();
 
-        std::vector<std::vector<double>> X_train(n_train);
-        std::vector<int> y_train(n_train);
+        std::vector<std::vector<double>> X_train;
+        std::vector<int> y_train;
+        X_train.reserve(use_swap_aug ? 2 * n_train : n_train);
+        y_train.reserve(use_swap_aug ? 2 * n_train : n_train);
+
         for (size_t i = 0; i < n_train; ++i) {
             size_t idx = fold.train_indices[i];
-            X_train[i] = raw_features[idx];
-            y_train[i] = dataset[idx].label;
+            X_train.push_back(raw_features[idx]);
+            y_train.push_back(dataset[idx].label);
+
+            if (use_swap_aug) {
+                X_train.push_back(swapCandidatesVector(raw_features[idx]));
+                int y_orig = dataset[idx].label;
+                int y_swapped = (y_orig == 0 ? 1 : (y_orig == 1 ? 0 : 2));
+                y_train.push_back(y_swapped);
+            }
         }
 
         std::vector<std::vector<double>> X_val(n_val);
@@ -118,6 +131,7 @@ inline CVMetrics runCrossValidation(
 
         // Configure training
         TrainingConfig fold_config = base_config;
+        fold_config.use_tta = use_tta;
         fold_config.experiment_name = base_config.experiment_name + "_fold" + std::to_string(f);
         fold_config.checkpoint_path = "models/temp_fold_" + std::to_string(f) + ".bin";
         fold_config.history_csv_path = ""; // Don't write history per fold
