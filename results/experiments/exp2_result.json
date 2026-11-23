@@ -11,20 +11,20 @@
   "class_weight_exponent": 1,
   "l2_lambda": 0,
   "random_seed": 42,
-  "best_epoch": 62,
-  "final_training_loss": 0.773194,
-  "validation_loss": 1.10135,
-  "validation_accuracy": 0.568282,
-  "macro_f1": 0.524219,
+  "best_epoch": 7,
+  "final_training_loss": 0.904845,
+  "validation_loss": 1.06552,
+  "validation_accuracy": 0.581498,
+  "macro_f1": 0.533155,
   "per_class_metrics": {
-    "A": {"precision": 0.60119, "recall": 0.540107, "f1": 0.569014, "support": 187},
-    "B": {"precision": 0.663265, "recall": 0.634146, "f1": 0.648379, "support": 205},
-    "Neither": {"precision": 0.3, "recall": 0.435484, "f1": 0.355263, "support": 62}
+    "A": {"precision": 0.586826, "recall": 0.524064, "f1": 0.553672, "support": 187},
+    "B": {"precision": 0.619048, "recall": 0.697561, "f1": 0.655963, "support": 205},
+    "Neither": {"precision": 0.410714, "recall": 0.370968, "f1": 0.389831, "support": 62}
   },
   "confusion_matrix": [
-    [101, 48, 38],
-    [50, 130, 25],
-    [17, 18, 27]
+    [98, 67, 22],
+    [51, 143, 11],
+    [18, 21, 23]
   ],
   "checkpoint_file": "models/model_exp2_inv_freq.bin"
 }

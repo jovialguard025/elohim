@@ -11,20 +11,20 @@
   "class_weight_exponent": 0.5,
   "l2_lambda": 0.0001,
   "random_seed": 42,
-  "best_epoch": 46,
-  "final_training_loss": 0.768375,
-  "validation_loss": 1.00554,
-  "validation_accuracy": 0.629956,
-  "macro_f1": 0.555121,
+  "best_epoch": 40,
+  "final_training_loss": 0.77263,
+  "validation_loss": 0.997458,
+  "validation_accuracy": 0.632159,
+  "macro_f1": 0.552427,
   "per_class_metrics": {
-    "A": {"precision": 0.649123, "recall": 0.593583, "f1": 0.620112, "support": 187},
-    "B": {"precision": 0.659664, "recall": 0.765854, "f1": 0.708804, "support": 205},
-    "Neither": {"precision": 0.4, "recall": 0.290323, "f1": 0.336449, "support": 62}
+    "A": {"precision": 0.664634, "recall": 0.582888, "f1": 0.621083, "support": 187},
+    "B": {"precision": 0.651822, "recall": 0.785366, "f1": 0.712389, "support": 205},
+    "Neither": {"precision": 0.395349, "recall": 0.274194, "f1": 0.32381, "support": 62}
   },
   "confusion_matrix": [
-    [111, 60, 16],
-    [37, 157, 11],
-    [23, 21, 18]
+    [109, 63, 15],
+    [33, 161, 11],
+    [22, 23, 17]
   ],
   "checkpoint_file": "models/model_exp8_l2.bin"
 }

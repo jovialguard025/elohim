@@ -11,20 +11,20 @@
   "class_weight_exponent": 1,
   "l2_lambda": 0,
   "random_seed": 42,
-  "best_epoch": 87,
-  "final_training_loss": 0.816136,
-  "validation_loss": 1.06077,
+  "best_epoch": 28,
+  "final_training_loss": 0.878884,
+  "validation_loss": 1.04588,
   "validation_accuracy": 0.563877,
-  "macro_f1": 0.517634,
+  "macro_f1": 0.515871,
   "per_class_metrics": {
-    "A": {"precision": 0.592105, "recall": 0.481283, "f1": 0.530973, "support": 187},
-    "B": {"precision": 0.65566, "recall": 0.678049, "f1": 0.666667, "support": 205},
-    "Neither": {"precision": 0.3, "recall": 0.435484, "f1": 0.355263, "support": 62}
+    "A": {"precision": 0.60274, "recall": 0.470588, "f1": 0.528529, "support": 187},
+    "B": {"precision": 0.631111, "recall": 0.692683, "f1": 0.660465, "support": 205},
+    "Neither": {"precision": 0.313253, "recall": 0.419355, "f1": 0.358621, "support": 62}
   },
   "confusion_matrix": [
-    [90, 56, 41],
-    [44, 139, 22],
-    [18, 17, 27]
+    [88, 61, 38],
+    [44, 142, 19],
+    [14, 22, 26]
   ],
   "checkpoint_file": "models/model_exp3_reduced_lr.bin"
 }

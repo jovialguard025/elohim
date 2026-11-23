@@ -1,0 +1,10 @@
+{
+  "optimal_temperature": 0.95,
+  "uncalibrated_ece": 0.0194373,
+  "calibrated_ece": 0.0159034,
+  "threshold_90_acc": 0.82,
+  "coverage_at_90": 0.250204,
+  "threshold_95_acc": 0.95,
+  "coverage_at_95": 0.0464548,
+  "chosen_gating_threshold": 0.82
+}

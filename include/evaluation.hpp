@@ -18,14 +18,14 @@ struct ClassMetrics {
 };
 
 struct EvaluationResult {
-    double accuracy;
-    double macro_f1;
-    double weighted_f1;
-    double weighted_loss;
+    double accuracy = 0.0;
+    double macro_f1 = 0.0;
+    double weighted_f1 = 0.0;
+    double weighted_loss = 0.0;
     std::vector<ClassMetrics> class_metrics; // size 3: 0 (A), 1 (B), 2 (Neither)
-    int confusion_matrix[3][3];              // [actual][predicted]
-    size_t total_samples;
-    size_t correct_predictions;
+    std::vector<std::vector<int>> confusion_matrix = {{0,0,0},{0,0,0},{0,0,0}}; // [actual][predicted]
+    size_t total_samples = 0;
+    size_t correct_predictions = 0;
 
     std::string toString() const {
         std::stringstream ss;

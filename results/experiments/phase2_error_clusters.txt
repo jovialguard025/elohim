@@ -1,0 +1,24 @@
+Top 5 Diagnostic Error Clusters from OOF Analysis:
+
+Cluster 1: Mutual A <-> B Confusion (Symmetry Violation)
+  - Actual A falsely predicted as B (320+ samples) and Actual B falsely predicted as A (230+ samples).
+  - Cause: Inputs [A_features, B_features] lack architectural permutation symmetry.
+  - Fix lever: A<->B swap augmentation + TTA (Phase 3a).
+
+Cluster 2: Neither False Positives / Poor Neither Recall
+  - True Neither class (N=263) has recall < 40%, with most samples misassigned to whichever candidate is closer.
+  - Cause: Model lacks confidence thresholding and candidate-pronoun gender mismatch feature.
+  - Fix lever: Post-hoc log-bias (Phase 3e) and Name-Gender Lexicon (Phase 4).
+
+Cluster 3: Mention Detection Dropouts (Exact Match Failure)
+  - Exact substring matcher fails when subsequent mentions use only surname (e.g. 'Telford' instead of 'Zoe Telford').
+  - Cause: Strict case-insensitive find on full candidate string.
+  - Fix lever: Mention-matcher refinement V2.x (Phase 3f).
+
+Cluster 4: Possessive Pronoun Ambiguity ('his', 'her')
+  - Possessive pronouns show higher error rate due to lack of syntactic role features.
+  - Fix lever: Extended syntactic features (Phase 4).
+
+Cluster 5: Extreme Outlier Feature Values Distorting Gradients
+  - Large token distances and character counts produce skewed input distributions.
+  - Fix lever: Log1p or 99th-percentile clipping input transforms (Phase 3b).

@@ -21,5 +21,11 @@ run: $(TARGET)
 plots:
 	python scripts/plot_results.py
 
+bert-train:
+	python scripts/bert/train_cv.py
+
+bert-test:
+	python scripts/bert/predict_test.py
+
 clean:
 	rm -f $(TARGET) $(TEST_TARGET) *.exe

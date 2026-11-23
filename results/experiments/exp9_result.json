@@ -1,0 +1,30 @@
+{
+  "experiment_name": "exp9_v3_features",
+  "dataset_partition": "GAP development (train: 2000), GAP validation (val: 454)",
+  "feature_representation": "56 features (V3)",
+  "network_architecture": "56 -> 32 -> 3 MLP (alpha=0.3, L2=1e-4)",
+  "optimizer": "Adam",
+  "learning_rate": 0.001,
+  "batch_size": 16,
+  "max_epochs": 200,
+  "early_stopping_patience": 30,
+  "class_weight_exponent": 0.3,
+  "l2_lambda": 0.0001,
+  "random_seed": 42,
+  "best_epoch": 26,
+  "final_training_loss": 0.512142,
+  "validation_loss": 0.831602,
+  "validation_accuracy": 0.665198,
+  "macro_f1": 0.615268,
+  "per_class_metrics": {
+    "A": {"precision": 0.695364, "recall": 0.561497, "f1": 0.621302, "support": 187},
+    "B": {"precision": 0.671937, "recall": 0.829268, "f1": 0.742358, "support": 205},
+    "Neither": {"precision": 0.54, "recall": 0.435484, "f1": 0.482143, "support": 62}
+  },
+  "confusion_matrix": [
+    [105, 67, 15],
+    [27, 170, 8],
+    [19, 16, 27]
+  ],
+  "checkpoint_file": "models/model_exp9_v3.bin"
+}

@@ -1,0 +1,14 @@
+{
+  "experiment": "baseline_36feat_repeated_cv",
+  "repeats": 3,
+  "folds_per_repeat": 5,
+  "total_folds": 15,
+  "accuracy_mean": 0.628102,
+  "accuracy_std": 0.0234815,
+  "macro_f1_mean": 0.561028,
+  "macro_f1_std": 0.0238682,
+  "log_loss_mean": 0.83096,
+  "log_loss_std": 0.026739,
+  "wilson_95_low": 0.615636,
+  "wilson_95_high": 0.653706
+}

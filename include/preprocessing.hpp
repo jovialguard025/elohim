@@ -124,6 +124,78 @@ inline std::vector<long long> findAllMentions(const std::string& text, const std
     return mentions;
 }
 
+inline std::vector<long long> findAllMentionsLoose(const std::string& text, const std::string& name, long long fallback_offset) {
+    if (name.empty() || text.empty()) {
+        return {fallback_offset};
+    }
+
+    std::string text_lower = toLowerString(text);
+    auto name_toks = tokenize(name);
+
+    std::vector<std::string> patterns;
+    // 1. Full name
+    patterns.push_back(toLowerString(name));
+    // 2. Last word (surname)
+    if (!name_toks.empty()) {
+        patterns.push_back(toLowerString(name_toks.back()));
+    }
+    // 3. First word (first name)
+    if (!name_toks.empty()) {
+        patterns.push_back(toLowerString(name_toks.front()));
+    }
+
+    // Deduplicate patterns
+    std::sort(patterns.begin(), patterns.end());
+    patterns.erase(std::unique(patterns.begin(), patterns.end()), patterns.end());
+
+    struct Span {
+        size_t start;
+        size_t end;
+    };
+    std::vector<Span> spans;
+
+    for (const auto& p : patterns) {
+        if (p.empty()) continue;
+        size_t pos = text_lower.find(p, 0);
+        while (pos != std::string::npos) {
+            bool before_boundary = (pos == 0) || !std::isalnum(static_cast<unsigned char>(text[pos - 1]));
+            size_t end_pos = pos + p.size();
+            bool after_boundary = (end_pos >= text.size()) || !std::isalnum(static_cast<unsigned char>(text[end_pos]));
+
+            if (before_boundary && after_boundary) {
+                spans.push_back({pos, end_pos});
+            }
+            pos = text_lower.find(p, pos + 1);
+        }
+    }
+
+    if (spans.empty()) {
+        return {fallback_offset};
+    }
+
+    // Sort spans by start asc, then end desc
+    std::sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) {
+        if (a.start != b.start) return a.start < b.start;
+        return a.end > b.end;
+    });
+
+    // Merge overlapping spans
+    std::vector<long long> mentions;
+    Span cur = spans[0];
+    for (size_t i = 1; i < spans.size(); ++i) {
+        if (spans[i].start < cur.end) {
+            // Overlapping span
+            cur.end = std::max(cur.end, spans[i].end);
+        } else {
+            mentions.push_back(static_cast<long long>(cur.start));
+            cur = spans[i];
+        }
+    }
+    mentions.push_back(static_cast<long long>(cur.start));
+
+    return mentions;
+}
+
 inline size_t countWords(const std::string& text) {
     auto tokens = tokenize(text);
     return tokens.size();

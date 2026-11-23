@@ -1,0 +1,22 @@
+{
+  "model": "36_feature_v2x_mlp_32hidden",
+  "dataset_partition": "GAP test (held-out: 2,000 samples)",
+  "re_examined_disclosure": "Test set was previously evaluated in baseline-69.75; CV is primary evidence",
+  "overall_accuracy": 0.6305,
+  "macro_f1": 0.567699,
+  "weighted_f1": 0.628378,
+  "log_loss": 0.825104,
+  "gating_threshold": 0.84,
+  "selective_coverage": 0.113,
+  "selective_accuracy": 0.849558,
+  "per_class_metrics": {
+    "A": {"precision": 0.690506, "recall": 0.610022, "f1": 0.647773, "support": 918},
+    "B": {"precision": 0.629328, "recall": 0.722807, "f1": 0.672836, "support": 855},
+    "Neither": {"precision": 0.400966, "recall": 0.365639, "f1": 0.382488, "support": 227}
+  },
+  "confusion_matrix": [
+    [560, 298, 60],
+    [173, 618, 64],
+    [78, 66, 83]
+  ]
+}

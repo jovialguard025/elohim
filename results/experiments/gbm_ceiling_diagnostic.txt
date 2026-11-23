@@ -1,0 +1,4 @@
+Gradient Boosting Classifier Ceiling Diagnostic (scikit-learn)
+15-fold CV Accuracy: 67.35% +/- 1.85%
+15-fold CV Macro-F1: 0.5945 +/- 0.0198
+15-fold CV Log-Loss: 0.7723 +/- 0.0390

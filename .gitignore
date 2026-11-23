@@ -8,6 +8,7 @@ run_tests
 # Temporary and log files
 temp_best.bin
 *.log
+data/processed/
 
 # Python cache
 __pycache__/

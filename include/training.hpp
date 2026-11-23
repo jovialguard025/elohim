@@ -162,7 +162,6 @@ inline TrainingResult trainModel(
     std::mt19937 shuffle_gen(config.seed);
 
     double best_macro_f1 = -1.0;
-    double best_acc = 0.0;
     double best_loss = 1e30;
     size_t best_epoch = 0;
     size_t epochs_no_improve = 0;
@@ -214,7 +213,6 @@ inline TrainingResult trainModel(
 
         if (is_best) {
             best_macro_f1 = val_eval.macro_f1;
-            best_acc = val_eval.accuracy;
             best_loss = val_eval.weighted_loss;
             best_epoch = epoch;
             epochs_no_improve = 0;

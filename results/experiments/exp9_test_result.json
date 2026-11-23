@@ -1,0 +1,20 @@
+{
+  "experiment_name": "exp9_v3_features",
+  "dataset_partition": "GAP test (held-out: 2000 samples)",
+  "feature_representation": "56 features (V3)",
+  "network_architecture": "56 -> 32 -> 3 MLP",
+  "test_accuracy": 0.6885,
+  "macro_f1": 0.639088,
+  "weighted_f1": 0.686308,
+  "loss": 0.750706,
+  "per_class_metrics": {
+    "A": {"precision": 0.777628, "recall": 0.62854, "f1": 0.695181, "support": 918},
+    "B": {"precision": 0.661877, "recall": 0.808187, "f1": 0.727751, "support": 855},
+    "Neither": {"precision": 0.509346, "recall": 0.480176, "f1": 0.494331, "support": 227}
+  },
+  "confusion_matrix": [
+    [577, 280, 61],
+    [120, 691, 44],
+    [45, 73, 109]
+  ]
+}

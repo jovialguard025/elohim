@@ -18,6 +18,7 @@ inline std::vector<double> extractFeaturesV1Candidate(
 {
     std::vector<double> feat;
     feat.reserve(6);
+    (void)pron_str;
 
     double text_len = static_cast<double>(std::max<size_t>(text.size(), 1));
     double total_sents = static_cast<double>(std::max<size_t>(sents.size(), 1));

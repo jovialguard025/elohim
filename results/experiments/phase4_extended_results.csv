@@ -1,0 +1,5 @@
+feature_group,feature_count,cv_accuracy_mean,cv_accuracy_std,cv_macro_f1,cv_loss
+Group 1: +URL Match,38,0.637206,0.0288458,0.558006,0.828967
+Group 2: +Syntactic Heuristics,48,0.663412,0.0161471,0.604823,0.785308
+Group 3: +Pronoun Type One-Hot,54,0.607585,0.0286924,0.519013,0.87074
+Group 4: +Name-Gender Lexicon,56,0.520777,0.0340351,0.460911,0.991581

@@ -1,0 +1,25 @@
+Top 5 Diagnostic Error Clusters from OOF Analysis:
+
+Cluster 1: Mutual A <-> B Confusion (Symmetry Violation)
+  - Actual A falsely predicted as B (359 samples) and Actual B falsely predicted as A (225 samples).
+  - Missing signal: Candidate slot permutation symmetry and relative comparative features.
+  - Fix lever: A<->B swap augmentation + TTA (Phase 2a) and relative features (Phase 3 g4).
+
+Cluster 2: Neither Recall Deficit (Minority Class Collapse)
+  - True Neither class (N=263) has recall = 35.36%, with 170/263 misclassified as A or B.
+  - Missing signal: Candidate gender agreement vs pronoun and Wikipedia entity identity.
+  - Fix lever: Name-gender lexicon (Phase 3 g6) and URL entity matching (Phase 3 g1).
+
+Cluster 3: Mention Detection Dropouts (Exact Substring Match Failure)
+  - Exact matcher fails when subsequent mentions use surname only (e.g. 'Telford' instead of 'Zoe Telford').
+  - Missing signal: Loose word-boundary surname matching.
+  - Fix lever: Refined mention matcher V2.x (Phase 2f).
+
+Cluster 4: Syntactic Role Blindness (Subject vs Object vs Possessive)
+  - Accusative pronoun 'him' has lowest accuracy (50.81%) and possessive 'her' has 62.08%.
+  - Missing signal: Sentence subject positions, possessive 's markers, and prepositional attachment.
+  - Fix lever: Extended syntactic heuristics (Phase 3 g2).
+
+Cluster 5: Heavy-Tailed Distance Distortion
+  - Large token distances and character counts produce skewed input distributions.
+  - Fix lever: Log1p or 99th-percentile clipping input transforms (Phase 2b).
