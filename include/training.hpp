@@ -101,13 +101,16 @@ inline double computeEpochLoss(
     return weight_sum > 0.0 ? (total_loss / weight_sum) : 0.0;
 }
 
-inline std::vector<double> swapCandidatesVector(const std::vector<double>& x) {
-    size_t d = x.size();
-    size_t half = d / 2;
-    std::vector<double> swapped(d);
-    for (size_t i = 0; i < half; ++i) {
-        swapped[i] = x[half + i];
-        swapped[half + i] = x[i];
+inline std::vector<double> swapCandidatesVector(const std::vector<double>& x,
+                                                size_t candidate_feature_count = 0) {
+    const size_t candidate_count = candidate_feature_count == 0
+        ? x.size() / 2
+        : candidate_feature_count;
+    if (2 * candidate_count > x.size()) return x;
+    std::vector<double> swapped = x;
+    for (size_t i = 0; i < candidate_count; ++i) {
+        swapped[i] = x[candidate_count + i];
+        swapped[candidate_count + i] = x[i];
     }
     return swapped;
 }
@@ -116,7 +119,8 @@ inline std::vector<int> predictModel(
     const MultilayerPerceptron& model,
     const std::vector<std::vector<double>>& X,
     std::vector<std::vector<double>>& probs,
-    bool use_tta = false)
+    bool use_tta = false,
+    size_t candidate_feature_count = 0)
 {
     if (!use_tta) {
         return model.predict(X, probs);
@@ -126,7 +130,7 @@ inline std::vector<int> predictModel(
     std::vector<double> h_orig, p_orig, h_swap, p_swap;
 
     for (size_t i = 0; i < X.size(); ++i) {
-        auto x_swap = swapCandidatesVector(X[i]);
+        auto x_swap = swapCandidatesVector(X[i], candidate_feature_count);
         model.forward(X[i], h_orig, p_orig);
         model.forward(x_swap, h_swap, p_swap);
 

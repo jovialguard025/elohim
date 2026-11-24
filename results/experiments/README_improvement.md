@@ -1,5 +1,7 @@
 # Comprehensive Empirical Evaluation & Improvement Report: GAP Pronoun Resolution
 
+> **Methodology correction (2026-11-24):** A follow-up audit found that the earlier repeated-CV runner selected each fold model's best epoch using that same outer fold, then scored it. Those historical CV results and decisions are exploratory and are not leakage-free estimates. The updated runner now uses fixed epochs and reserves the outer fold for scoring only. The original held-out test evaluation remains a one-time result; no new test evaluation was performed during this follow-up. See “Current Leakage-Safe Follow-up” below for the latest paired results.
+
 This report details the rigorous, hypothesis-driven empirical investigation of the C++14 pronoun-resolution classifier on the Google GAP dataset. The investigation evaluates the fixed 36-feature baseline architecture (MLP 36→32→3) and an extended-feature track under repeated 5-fold stratified cross-validation (15 folds: seeds 42, 43, 44), followed by model capacity diagnostics, calibration gating, and a single final evaluation on held-out `gap-test.tsv` ($N=2,000$).
 
 ---
@@ -52,12 +54,24 @@ Every experiment below was evaluated on the identical 15 stratified folds (5 fol
 | **P2f** | 36-feature | Mention-Matcher Refinement V2.x | 36 | 63.56% (2.10%) | 0.5757 | 0.8067 | +0.0139 | 0.0029 | **ACCEPTED** |
 | **P3g1**| extended | +url_match (Wiki Title & Entity) | 40 | 67.77% (1.80%) | 0.6238 | 0.7456 | +0.0611 | 0.0064 | **ACCEPTED** |
 | **P3g2**| extended | +syntactic heuristics (Subject, Possessive, Preps, Parens) | 52 | 69.44% (1.16%) | 0.6422 | 0.7201 | +0.0255 | 0.0048 | **ACCEPTED** |
-| **P3g3**| extended | +pronoun-type one-hot (Shared Block) | 58 | 61.65% (2.92%) | 0.5429 | 0.8578 | -0.1377 | 0.0088 | **REJECTED** |
+| **P3g3**| extended | +pronoun-type one-hot (Shared Block) | 58 | 61.65% (2.92%) | 0.5429 | 0.8578 | -0.1377 | 0.0088 | **INVALIDATED** (shared-block TTA bug) |
 | **P3g4**| extended | +relative features (A-B diffs & Ranks) | 64 | 69.60% (1.50%) | 0.6444 | 0.7161 | +0.0040 | 0.0066 | **REJECTED** ($\bar{\Delta} < \text{SE}$) |
-| **P3g5**| extended | +local lexical context (Hashed Token Bag) | 100 | 64.44% (1.80%) | 0.5794 | 0.8137 | -0.0936 | 0.0075 | **REJECTED** |
+| **P3g5**| extended | +local lexical context (Hashed Token Bag) | 100 | 64.44% (1.80%) | 0.5794 | 0.8137 | -0.0936 | 0.0075 | **INVALIDATED** (shared-block TTA bug) |
 | **P3g6**| extended | +name-gender lexicon (Train-Fold Only) | 54 | 63.11% (2.86%) | 0.5739 | 0.8457 | -0.1256 | 0.0147 | **REJECTED** |
 
 ---
+
+### Correction: Shared-Feature TTA Results (2026-11-24)
+
+The P3g3 and P3g5 results above used an invalid TTA permutation: the implementation split an extended `[A(C) | B(C) | Shared(S)]` vector in half, moving shared values into candidate blocks. Those two historical rows are invalidated. With layout-aware TTA, the fresh-seed paired results are:
+
+| Variant | CV accuracy | Macro-F1 | Log-loss | Paired loss gain (SE) | Accuracy delta | Decision |
+|:---|---:|---:|---:|---:|---:|:---|
+| 52-feature baseline | 70.3063% | 0.645053 | 0.709397 | — | — | Baseline |
+| + pronoun one-hot | 70.2930% | 0.645174 | 0.709458 | -0.000061 (0.002781) | -0.0132 pp | Rejected |
+| + lexical bag | 68.8672% | 0.634363 | 0.732816 | -0.023419 (0.006236) | -1.4391 pp | Rejected |
+
+All comparisons use the same 15 folds from seeds 100, 101, and 102, with the frozen 32-hidden-unit Trial 33 settings. `gap-test.tsv` was not loaded. See `docs/experiment_log.md` and `results/experiments/extended_tta_layout_audit.txt` for details.
 
 ## 3. Phase 1: Error Analysis Summary
 
@@ -194,9 +208,107 @@ Actual Neither        67            71              89
 
 1. **Why the Historical 69.75% Test Result Was Reached**:
    The previous `baseline-69.75` model used an 80-feature V3 vector with 64 hidden units and validation-checkpoint early stopping. Our 52-feature MLP achieves a closely matched **68.80% test accuracy** with only 32 hidden units under strict leakage-free standardizer and TTA protocols.
-2. **Why 75% Cannot Be Reached Without Pretrained Transformers**:
+2. **Why 80% Remains Difficult with the Current Inputs**:
    In pronoun coreference resolution, many instances hinge on deep world knowledge, selectional restrictions, and discourse coherence. For example:
    > *"The trophy would not fit in the brown suitcase because it was too big."*
-   Surface heuristics (character distance, mention counts, capitalized position) cannot know whether "trophy" or "suitcase" is too big. This semantic binding is only resolved by pretrained masked language models (e.g. DeBERTa-v3, RoBERTa) fine-tuned on span representations.
+   Surface heuristics (character distance, mention counts, capitalized position) may not represent whether "trophy" or "suitcase" is too big. This is a likely representation limit, not proof that a non-pretrained model cannot improve further.
 3. **Recommended Next Step**:
-   Transfer the pipeline to `scripts/bert/train.py` using `microsoft/deberta-v3-large` via Google Colab or Kaggle GPU ([notebooks/train_gap_kaggle_colab.ipynb](file:///c:/SLM/notebooks/train_gap_kaggle_colab.ipynb)), which achieves $\ge 91\%$ on the GAP benchmark.
+   Continue leakage-safe C++ feature and optimization experiments. Pretrained models are outside the constraints of the current track.
+
+---
+
+## Current Leakage-Safe Follow-up (2026-11-24)
+
+The CV implementation now disables outer-fold early stopping. Earlier repeated-CV reports in this repository chose each model's best epoch using the same fold later scored, so those figures are exploratory history and must not be used as unbiased performance estimates. The new audits use fixed epochs; the held-out test file was not read.
+
+| Paired change | Fresh-seed CV result | Decision |
+|:---|:---|:---|
+| LR 0.00206089 → 0.0015, 10 members, alpha 0.28869, epochs 26 | Seeds 1900–1902: accuracy +0.122 pp, macro-F1 +0.00033, loss gain 0.00616 (SE 0.00103). Seeds 2000–2002: accuracy +0.136 pp, macro-F1 +0.00208, loss gain 0.00554 (SE 0.00086). | Accepted twice |
+| Alpha 0.28869 → 0.24, LR 0.0015, 10 members, epochs 26 | Seeds 2200–2202: accuracy +0.190 pp, macro-F1 +0.00113, loss gain 0.00153 (SE 0.00024). Seeds 2300–2302: accuracy +0.217 pp, macro-F1 +0.00209, loss gain 0.00123 (SE 0.00020). | Accepted twice |
+| 5 → 10 members, LR 0.0015, alpha 0.24, epochs 26 | Seeds 2800–2802: accuracy +0.177 pp, macro-F1 +0.00111, loss gain 0.00250 (SE 0.00068). Seeds 2900–2902: accuracy +0.054 pp, macro-F1 +0.00029, loss gain 0.00225 (SE 0.00061). | Accepted twice |
+| LR 0.0015 → 0.0012, 10 members, alpha 0.24, epochs 26 | Seeds 3000–3002: accuracy +0.027 pp, macro-F1 +0.00105, loss gain 0.00253 (SE 0.00059). Seeds 3100–3102: accuracy +0.068 pp, macro-F1 +0.00114, loss gain 0.00290 (SE 0.00020). | Accepted twice |
+| LR 0.0012 → 0.0009, otherwise same | Seeds 3200–3202 passed, but seeds 3300–3302 had -0.081 pp accuracy. | Rejected |
+
+The selected final schedule is now **20 epochs with SWA over the final five epochs**, LR 0.0012, alpha 0.24, and ten 32-hidden-unit members. Fixed 20-epoch SWA passed the paired loss/accuracy rule on seeds 5100–5102 and 5200–5202; macro-F1 was slightly higher on the first set and effectively unchanged on the fresh set (−0.000008). On fresh seeds 5200–5202, SWA yielded 69.59% accuracy / 0.6320 macro-F1 versus 69.48% / 0.6321 without SWA. Compared with 26 epochs, 20 epochs improved accuracy, macro-F1, and loss on both seeds 3900–3902 and 4000–4002. The 80% target remains unmet.
+
+Other corrected checks were rejected: 20 vs 10 members did not clear the loss-SE rule; nearest-mention syntax and pronoun one-hot did not reproduce acceptance; the fold-trained name-gender lexicon hurt materially. Fixed 57-epoch training was worse than 26 epochs on a matched audit. Raw outputs and reproducible runners are in `results/experiments/*fixed*` and `scripts/fixed*`.
+
+Further metric checks did not justify changes: alpha 0.20 improved loss and accuracy on one set but lowered macro-F1; alpha 0.22 passed once but lowered macro-F1 on fresh seeds; a +0.05 Neither bias raised macro-F1 slightly while lowering accuracy and worsening loss. Candidate-relative features lifted accuracy and macro-F1 on one set but did not clear the paired loss-SE criterion.
+
+Epoch checks support 20 over 26 on two paired seed sets. Sixteen epochs improved macro-F1 and loss but lowered accuracy; eighteen epochs did not improve accuracy or macro-F1 versus 20.
+
+Further corrected checks rejected the shallow grammatical-role block, fold-trained name-gender lexicon, leave-one-record-out lexical path association, local hashed lexical bag, and TF-IDF sentence overlap. Cosine decay and weight decay did not pass the paired loss/accuracy rule. The five-epoch SWA variant did pass on two fresh-seed sets.
+
+`scripts/train_final_candidate.cpp` trains the current ten-member SWA candidate on development and validation data only, saving weights, scaler, and metadata under `models/final_candidate_*`. It does not load test data. The one-time held-out test score remains unchanged and was not used in this follow-up.
+
+### Probability Schedule Blend Update (2026-11-24)
+
+A 50/50 probability blend of the constant and cosine learning-rate schedules passed a fresh pooled paired audit on seeds 5900–5902 and 6000–6002 (30 folds). It achieved **69.832% accuracy, 0.63304 macro-F1, and 0.69067 log-loss**. Against the constant schedule on identical folds: **+0.095 percentage points accuracy**, **+0.00051 macro-F1**, and **0.000605 ± 0.000305 paired log-loss gain**. This meets the predefined acceptance rule. The final trainer now produces ten 32-hidden-unit SWA models per schedule, plus a shared scaler and metadata specifying the 50/50 probability blend. The test set was not loaded. The 80% goal remains unmet.
+
+The earlier statement that the final candidate used one ten-member ensemble is superseded by this schedule-blended candidate. Artifacts are saved as `models/final_candidate_constant_member_*.bin` and `models/final_candidate_cosine_member_*.bin`.
+
+### Follow-up screens after the 50/50 schedule blend (2026-11-24)
+
+The 50/50 constant/cosine SWA blend remains the selected candidate at 69.832% fresh pooled CV accuracy and 0.63304 macro-F1. Additional screens did not justify replacing it:
+
+| Screen | Paired result | Decision |
+|:---|:---|:---|
+| Explicit honorific/pronoun gender cue | On seeds 6100–6102, +0.231 pp accuracy and +0.00096 macro-F1, but loss gain was −0.000102 (SE 0.000864). | Rejected |
+| Adam β₁=0.85 | On seeds 6400–6402, +0.054 pp accuracy; loss gain 0.000031 (SE 0.000097), macro-F1 slightly lower. | Rejected |
+| Adam β₁=0.95 / β₂=0.99 | Both lowered accuracy, macro-F1, and worsened loss on the same paired selection folds. | Rejected |
+| Label smoothing ε=0.05 | On seeds 6600–6602, accuracy −0.095 pp, macro-F1 −0.00237, loss worsened by 0.001494 (SE 0.001027). | Rejected |
+| α=0.20 blended with α=0.24 | The full α=0.20 schedule blend improved accuracy/loss but lowered macro-F1; smaller mixtures did not improve all metrics. | Rejected |
+| 80% record subsampling | On seeds 7000–7002, accuracy +0.394 pp and macro-F1 +0.00386, but loss worsened. A 40% probability mixture passed on those selection folds and improved against constant-only on seeds 7100–7102, but is not the current candidate because it was not tested against the schedule blend. | Not promoted |
+| Subsampled schedule mixture | On seeds 7200–7202, a 20% subsampled component improved accuracy and macro-F1 but missed paired loss. A 10% component on fresh seeds 7300–7302 lowered accuracy and macro-F1. | Rejected |
+| Record bootstrap bagging | Low-weight blends improved metrics against constant-only on seeds 7400–7402, but the corresponding schedule blend on seeds 7500–7502 lowered accuracy and macro-F1. | Rejected |
+
+`ExperimentConfig` now has optional Adam β, label-smoothing, per-member record-subsampling, and record-bootstrap controls for continued leakage-safe research. Defaults preserve the confirmed candidate. The optional honorific cue is disabled. The held-out test was not read in any follow-up experiment.
+
+### Post-ensemble Neither calibration (2026-11-24)
+
+A fixed `-0.10` logit bias on the Neither class, applied **after** TTA, member averaging, and the 50/50 schedule blend, passed on two independent fresh seed sets. Seeds 7700–7702: accuracy +0.217 pp, macro-F1 −0.00010, loss gain 0.001997 (SE 0.000190). Seeds 7800–7802: accuracy +0.204 pp, macro-F1 +0.00097, loss gain 0.002100 (SE 0.000174). Across these 30 fresh folds, the candidate averaged 69.798% accuracy and 0.63147 macro-F1; paired gains averaged +0.210 pp accuracy and +0.00044 macro-F1. Both fresh sets independently passed the loss/accuracy rule. The bias was selected on the separate seeds 7600–7602, where it also improved all three metrics. The final config records the bias, and `include/final_candidate_predictor.hpp` applies it after the full schedule blend while preserving candidate-swap TTA symmetry.
+
+Inference use: include `final_candidate_predictor.hpp`, construct `msar::FinalCandidatePredictor predictor("models")`, then call `predictProbabilities(record)` for `[A, B, Neither]` probabilities or `predict(record)` for the class index. The wrapper expects both base and local-TF-IDF model groups, their two scalers, and `final_candidate_local_tfidf_idf.txt`, produced by `scripts/train_final_candidate.cpp`.
+
+**Training objective/regularization screens (2026-11-24):** Focal loss γ=1.0 (seeds 8200–8202) lowered accuracy and macro-F1 and sharply worsened log-loss, so it was rejected. Hidden dropout 0.10 (seeds 8300–8302) produced +0.041 pp accuracy and a negligible loss gain (0.000105, SE 0.000801), but macro-F1 fell by 0.00020; it was rejected. Defaults remain focal γ=0 and dropout=0.
+
+### Asymmetric pronoun calibration (withdrawn)
+
+An exploratory `-0.30` Candidate B logit bias for `him` passed two paired-fold checks, but it violates the required A/B swap symmetry. It was withdrawn and is not used in the inference wrapper. These results are historical only:
+
+| Fresh seeds | Accuracy before -> after | Macro-F1 before -> after | Paired log-loss gain (SE) | Decision |
+|:---|:---|:---|:---|:---|
+| 9300-9302 | 70.021% -> 70.252% | 0.63360 -> 0.63675 | 0.001368 (0.000389) | Withdrawn: asymmetric |
+| 9400-9402 | 69.697% -> 69.833% | 0.63074 -> 0.63273 | 0.001360 (0.000476) | Withdrawn: asymmetric |
+
+### Swap-symmetric `him` recency calibration (2026-11-24)
+
+A `-0.10` logit adjustment to whichever candidate is closer to the pronoun, only for `him` and only when distances differ, preserves A/B permutation symmetry. It passed paired-fold checks on two independent fresh seed sets:
+
+| Fresh seeds | Accuracy before -> after | Macro-F1 before -> after | Paired log-loss gain (SE) | Decision |
+|:---|:---|:---|:---|:---|
+| 10200-10202 | 69.696% -> 69.723% | 0.63218 -> 0.63243 | 0.000423 (0.000109) | Accepted |
+| 10300-10302 | 70.008% -> 70.089% | 0.63367 -> 0.63430 | 0.000421 (0.000096) | Accepted |
+
+The config and predictor apply this candidate-relative adjustment after the `-0.10` Neither bias. The two fresh sets average 70.01% accuracy / 0.63337 macro-F1. No test data was loaded. See `fixed20_him_nearest_bias_fresh_audit.txt` and `fixed20_him_nearest_bias_confirm_audit.txt` for paired folds.
+
+The 20-member-per-schedule ensemble screen on seeds 8900-8902 increased accuracy by 0.068 pp and macro-F1 by 0.00174, but worsened paired log-loss by 0.000148 (SE 0.000477), so the 10-member schedules remain selected.
+
+Follow-up screens on seeds 9500-9502 rejected conditional Candidate B adjustments for `her`, for no-URL rows, and a conditional Neither boost for `her`; each lowered accuracy and/or macro-F1 and worsened loss. The optional prior-compatible-pronoun link feature was rejected on matched seeds 9700-9702 (accuracy +0.028 pp, macro-F1 -0.00138, paired loss worsened by 0.002079, SE 0.000927). These blocks remain disabled.
+
+The wider prior-pronoun-chain feature was rejected on seeds 9900-9902 (accuracy -0.054 pp, macro-F1 -0.00102, paired loss worsened by 0.001181, SE 0.001041). The local-window TF-IDF feature was rechecked with the symmetry-safe calibrations and selected as a 75% probability blend with the base model. It uses nearest-prior-mention and pronoun local contexts, fold-fitted IDF, candidate-name exclusion, and stopword filtering:
+
+| Fresh seeds | Accuracy before -> after | Macro-F1 before -> after | Paired log-loss gain (SE) | Decision |
+|:---|:---|:---|:---|:---|
+| 10500-10502 | 69.872% -> 70.171% | 0.62996 -> 0.63259 | 0.001433 (0.000730) | Accepted |
+| 10600-10602 | 69.668% -> 69.858% | 0.62934 -> 0.63073 | 0.001749 (0.000578) | Accepted |
+
+Across these confirmations the feature blend averaged 70.014% accuracy / 0.63166 macro-F1, improving by 0.244 pp and 0.00201 over the base candidate. The trainer now saves both model variants, separate scalers, and a fold-fitted IDF resource; the predictor blends base/local probabilities 25/75. No test data was loaded. See `fixed20_local_tfidf_75_fresh_audit.txt` and `fixed20_local_tfidf_75_confirm_audit.txt`.
+
+### Current selected model and artifact (2026-11-24)
+
+The selected GitHub model is the **52-feature, 32-hidden-unit base ensemble**: ten SWA members each for constant and cosine schedules, 50/50 probability averaging, the validated `-0.10` Neither calibration, and the swap-symmetric `-0.10` bias toward whichever candidate is nearer for `him`. Fresh paired audits on seeds 10200–10202 and 10300–10302 averaged **69.906% accuracy / 0.63337 macro-F1**. This remains below the 80% goal. No held-out test data was loaded.
+
+Correction to the earlier local TF-IDF section above: the 75% blend results were based on calibration before blending, which did not match the deployable inference order. Corrected inference-order runs found no local blend weight that improves both accuracy and macro-F1 on fresh paired folds. The predictor therefore defaults to base-only inference (`local_tfidf_weight=0.0`). See `fixed20_local_tfidf_exact_order_grid.txt`, `fixed20_local_tfidf_exact_order_fresh_audit.txt`, and `fixed20_local_tfidf_exact_order_grid_11200.txt` for the corrected results.
+
+For inference, include `include/final_candidate_predictor.hpp`, construct `msar::FinalCandidatePredictor predictor("models")`, and call `predictProbabilities(record)` or `predict(record)`. The committed base files are the constant/cosine member weights, `final_candidate_scaler.txt`, and `final_candidate_config.json`; optional local TF-IDF assets are not needed with the default configuration.

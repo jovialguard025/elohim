@@ -33,6 +33,7 @@ public:
     std::vector<double> mW2, vW2;
     std::vector<double> mb2, vb2;
     size_t time_step = 0;
+    std::mt19937 dropout_rng;
 
     MultilayerPerceptron(size_t in_dim = 36, size_t hid_dim = 32, size_t out_dim = 3, unsigned int seed = 42)
         : input_dim(in_dim), hidden_dim(hid_dim), output_dim(out_dim) {
@@ -66,6 +67,7 @@ public:
         vb2.assign(b2.size(), 0.0);
 
         time_step = 0;
+        dropout_rng.seed(seed ^ 0x85ebca6bU);
     }
 
     // Forward pass for a single input vector
@@ -132,7 +134,10 @@ public:
         double l2_lambda,
         double beta1 = 0.9,
         double beta2 = 0.999,
-        double eps = 1e-8)
+        double eps = 1e-8,
+        double label_smoothing = 0.0,
+        double focal_gamma = 0.0,
+        double dropout_rate = 0.0)
     {
         size_t batch_sz = X_batch.size();
         if (batch_sz == 0) return;
@@ -141,10 +146,39 @@ public:
 
         std::vector<std::vector<double>> H_batch(batch_sz, std::vector<double>(hidden_dim));
         std::vector<std::vector<double>> P_batch(batch_sz, std::vector<double>(output_dim));
+        std::vector<std::vector<double>> dropout_masks(batch_sz, std::vector<double>(hidden_dim, 1.0));
+        const double dropout = std::max(0.0, std::min(0.8, dropout_rate));
+        const double dropout_scale = dropout < 1.0 ? 1.0 / (1.0 - dropout) : 1.0;
+        std::bernoulli_distribution keep_unit(1.0 - dropout);
 
         double batch_weight_sum = 0.0;
         for (size_t s = 0; s < batch_sz; ++s) {
             forward(X_batch[s], H_batch[s], P_batch[s]);
+            if (dropout > 0.0) {
+                for (size_t j = 0; j < hidden_dim; ++j) {
+                    if (keep_unit(dropout_rng)) {
+                        dropout_masks[s][j] = dropout_scale;
+                        H_batch[s][j] *= dropout_scale;
+                    } else {
+                        dropout_masks[s][j] = 0.0;
+                        H_batch[s][j] = 0.0;
+                    }
+                }
+                double max_z = -1e30;
+                std::vector<double> z(output_dim);
+                for (size_t k = 0; k < output_dim; ++k) {
+                    double sum = b2[k];
+                    for (size_t j = 0; j < hidden_dim; ++j) sum += H_batch[s][j] * W2[j * output_dim + k];
+                    z[k] = sum;
+                    if (sum > max_z) max_z = sum;
+                }
+                double sum_exp = 0.0;
+                for (size_t k = 0; k < output_dim; ++k) {
+                    P_batch[s][k] = std::exp(z[k] - max_z);
+                    sum_exp += P_batch[s][k];
+                }
+                for (size_t k = 0; k < output_dim; ++k) P_batch[s][k] /= sum_exp;
+            }
             int target = y_batch[s];
             batch_weight_sum += class_weights[target];
         }
@@ -159,12 +193,24 @@ public:
         for (size_t s = 0; s < batch_sz; ++s) {
             int target = y_batch[s];
             double sample_weight = class_weights[target] / batch_weight_sum;
+            double focal_gradient_scale = 1.0;
+            if (focal_gamma > 0.0 && label_smoothing == 0.0) {
+                const double pt = std::max(1e-12, std::min(1.0, P_batch[s][target]));
+                const double one_minus_pt = std::max(0.0, 1.0 - pt);
+                focal_gradient_scale = std::pow(one_minus_pt, focal_gamma);
+                if (one_minus_pt > 0.0) {
+                    focal_gradient_scale += focal_gamma * pt *
+                        std::pow(one_minus_pt, focal_gamma - 1.0) * std::log(pt);
+                }
+            }
 
             // Output gradient dL/dz_k = sample_weight * (p_k - y_k)
             std::vector<double> dL_dz(output_dim);
             for (size_t k = 0; k < output_dim; ++k) {
-                double diff = P_batch[s][k] - (static_cast<int>(k) == target ? 1.0 : 0.0);
-                dL_dz[k] = sample_weight * diff;
+                const double target_prob = label_smoothing / static_cast<double>(output_dim) +
+                    (static_cast<int>(k) == target ? 1.0 - label_smoothing : 0.0);
+                double diff = P_batch[s][k] - target_prob;
+                dL_dz[k] = sample_weight * focal_gradient_scale * diff;
             }
 
             // Gradients for W2 and b2
@@ -184,8 +230,10 @@ public:
                     dL_dh[j] += dL_dz[k] * W2[j * output_dim + k];
                 }
                 // ReLU derivative
-                if (H_batch[s][j] <= 0.0) {
+                if (H_batch[s][j] <= 0.0 || dropout_masks[s][j] == 0.0) {
                     dL_dh[j] = 0.0;
+                } else {
+                    dL_dh[j] *= dropout_masks[s][j];
                 }
             }
 

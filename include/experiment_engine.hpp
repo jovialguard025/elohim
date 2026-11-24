@@ -40,12 +40,23 @@ struct ExperimentConfig {
     double learning_rate = 0.001;
     double class_weight_alpha = 0.50;
     double l2_lambda = 0.0001;
+    double adam_beta1 = 0.9;
+    double adam_beta2 = 0.999;
+    double label_smoothing = 0.0;
+    double focal_gamma = 0.0;
+    double dropout_rate = 0.0;
     double weight_decay = 0.0; // Decoupled weight decay (AdamW)
     size_t batch_size = 32;
     size_t max_epochs = 50;
     size_t patience = 15;
     bool use_swap_aug = false;
     bool use_tta = false;
+    size_t candidate_feature_count = 0; // 0 means two equal candidate blocks and no shared features
+    size_t ensemble_members = 1; // Independent MLPs trained on each fold's same training partition
+    double ensemble_sample_fraction = 1.0; // Optional row-group subsampling per member (keeps swaps paired)
+    bool ensemble_bootstrap = false; // Record-level bootstrap sampling per member
+    bool ensemble_geometric_mean = false; // Log-pool member probabilities instead of arithmetic averaging
+    bool use_early_stopping = true; // Disabled by repeated CV so outer folds remain score-only
     TransformType transform = TRANSFORM_NONE;
     bool use_cosine_lr = false;
     bool use_swa = false;
@@ -63,6 +74,8 @@ struct FoldEvaluation {
     double weighted_f1 = 0.0;
     double log_loss = 0.0;
     EvaluationResult eval_res;
+    std::vector<int> fold_labels;
+    std::vector<std::vector<double>> fold_probabilities;
 };
 
 struct RepeatedCVResult {
@@ -208,7 +221,9 @@ inline TrainingResult trainModelExtended(
                 y_batch[s] = y_train[idx];
             }
 
-            model.trainBatch(X_batch, y_batch, result.class_weights, current_lr, cfg.l2_lambda);
+            model.trainBatch(X_batch, y_batch, result.class_weights, current_lr, cfg.l2_lambda,
+                             cfg.adam_beta1, cfg.adam_beta2, 1e-8, cfg.label_smoothing,
+                             cfg.focal_gamma, cfg.dropout_rate);
 
             // Decoupled weight decay (AdamW)
             if (cfg.weight_decay > 0.0) {
@@ -237,36 +252,40 @@ inline TrainingResult trainModelExtended(
             for (size_t k = 0; k < model.b2.size(); ++k) swa_b2[k] += model.b2[k];
         }
 
-        // Validation evaluation
-        std::vector<std::vector<double>> val_probs;
-        std::vector<int> val_preds = predictModel(model, X_val, val_probs, cfg.use_tta);
-        auto val_eval = evaluatePredictions(y_val, val_preds, val_probs, result.class_weights);
+        if (cfg.use_early_stopping) {
+            // This is suitable for a dedicated validation split. Repeated CV
+            // disables it so the outer scoring fold cannot select an epoch.
+            std::vector<std::vector<double>> val_probs;
+            std::vector<int> val_preds = predictModel(model, X_val, val_probs, cfg.use_tta,
+                                                      cfg.candidate_feature_count);
+            auto val_eval = evaluatePredictions(y_val, val_preds, val_probs, result.class_weights);
 
-        EpochRecord ep;
-        ep.epoch = epoch;
-        ep.train_loss = total_samples_epoch > 0 ? (total_epoch_loss / total_samples_epoch) : 0.0;
-        ep.val_loss = val_eval.weighted_loss;
-        ep.val_acc = val_eval.accuracy;
-        ep.val_macro_f1 = val_eval.macro_f1;
-        result.history.push_back(ep);
+            EpochRecord ep;
+            ep.epoch = epoch;
+            ep.train_loss = total_samples_epoch > 0 ? (total_epoch_loss / total_samples_epoch) : 0.0;
+            ep.val_loss = val_eval.weighted_loss;
+            ep.val_acc = val_eval.accuracy;
+            ep.val_macro_f1 = val_eval.macro_f1;
+            result.history.push_back(ep);
 
-        bool is_best = false;
-        if (val_eval.macro_f1 > best_macro_f1 + 1e-5) {
-            is_best = true;
-        } else if (std::abs(val_eval.macro_f1 - best_macro_f1) <= 1e-5 && val_eval.weighted_loss < best_loss) {
-            is_best = true;
-        }
+            bool is_best = false;
+            if (val_eval.macro_f1 > best_macro_f1 + 1e-5) {
+                is_best = true;
+            } else if (std::abs(val_eval.macro_f1 - best_macro_f1) <= 1e-5 && val_eval.weighted_loss < best_loss) {
+                is_best = true;
+            }
 
-        if (is_best) {
-            best_macro_f1 = val_eval.macro_f1;
-            best_loss = val_eval.weighted_loss;
-            best_epoch = epoch;
-            epochs_no_improve = 0;
-            model.saveCheckpoint(temp_ckpt);
-        } else {
-            epochs_no_improve++;
-            if (epochs_no_improve >= cfg.patience) {
-                break;
+            if (is_best) {
+                best_macro_f1 = val_eval.macro_f1;
+                best_loss = val_eval.weighted_loss;
+                best_epoch = epoch;
+                epochs_no_improve = 0;
+                model.saveCheckpoint(temp_ckpt);
+            } else {
+                epochs_no_improve++;
+                if (epochs_no_improve >= cfg.patience) {
+                    break;
+                }
             }
         }
     }
@@ -278,17 +297,21 @@ inline TrainingResult trainModelExtended(
         for (size_t k = 0; k < model.W2.size(); ++k) model.W2[k] = swa_W2[k] / static_cast<double>(swa_count);
         for (size_t k = 0; k < model.b2.size(); ++k) model.b2[k] = swa_b2[k] / static_cast<double>(swa_count);
         result.best_epoch = cfg.max_epochs;
-    } else {
+    } else if (cfg.use_early_stopping) {
         // Restore best checkpoint
         try {
             model.loadCheckpoint(temp_ckpt);
         } catch (...) {}
         result.best_epoch = best_epoch;
+    } else {
+        // Fixed-epoch fit: validation data has not influenced model selection.
+        result.best_epoch = cfg.max_epochs;
     }
     std::remove(temp_ckpt.c_str());
 
     std::vector<std::vector<double>> best_val_probs;
-    std::vector<int> best_val_preds = predictModel(model, X_val, best_val_probs, cfg.use_tta);
+    std::vector<int> best_val_preds = predictModel(model, X_val, best_val_probs, cfg.use_tta,
+                                                   cfg.candidate_feature_count);
 
     // Apply post-hoc Neither log-bias and/or temperature if configured
     if (cfg.neither_bias != 0.0 || cfg.temperature != 1.0) {
@@ -390,7 +413,9 @@ inline RepeatedCVResult runRepeatedCV(
 
             // Train model
             unsigned int fold_run_seed = seed * 1000 + static_cast<unsigned int>(f);
-            auto train_res = trainModelExtended(X_train, y_train, X_val, y_val, cfg, fold_run_seed);
+            ExperimentConfig fold_cfg = cfg;
+            fold_cfg.use_early_stopping = false;
+            auto train_res = trainModelExtended(X_train, y_train, X_val, y_val, fold_cfg, fold_run_seed);
 
             FoldEvaluation fe;
             fe.fold_idx = fold_counter++;
@@ -400,6 +425,8 @@ inline RepeatedCVResult runRepeatedCV(
             fe.weighted_f1 = train_res.final_val_eval.weighted_f1;
             fe.log_loss = train_res.final_val_eval.weighted_loss;
             fe.eval_res = train_res.final_val_eval;
+            fe.fold_labels = y_val;
+            fe.fold_probabilities = train_res.val_probs;
             res.folds.push_back(fe);
 
             // Accumulate OOF probabilities (will divide by seeds.size() at end)
@@ -524,13 +551,18 @@ inline RepeatedCVResult runRepeatedCVExtended(
             size_t n_train = fold.train_indices.size();
             size_t n_val = fold.val_indices.size();
 
-            // Fit name-gender lexicon ONLY on training fold
+            // Fold-derived resources are fitted only on the training partition.
             NameGenderLexicon lexicon;
-            if (ext_cfg.use_gender) {
+            ContextPathLexicon path_lexicon;
+            FoldIdfLexicon idf_lexicon;
+            if (ext_cfg.use_gender || ext_cfg.use_path_lexicon || ext_cfg.use_tfidf_overlap ||
+                ext_cfg.use_local_tfidf_overlap) {
                 std::vector<GapRecord> train_records;
                 train_records.reserve(n_train);
                 for (size_t idx : fold.train_indices) train_records.push_back(dataset[idx]);
-                lexicon.fit(train_records);
+                if (ext_cfg.use_gender) lexicon.fit(train_records);
+                if (ext_cfg.use_path_lexicon) path_lexicon.fit(train_records);
+                if (ext_cfg.use_tfidf_overlap || ext_cfg.use_local_tfidf_overlap) idf_lexicon.fit(train_records);
             }
 
             std::vector<std::vector<double>> X_train;
@@ -540,7 +572,10 @@ inline RepeatedCVResult runRepeatedCVExtended(
 
             for (size_t i = 0; i < n_train; ++i) {
                 size_t idx = fold.train_indices[i];
-                auto f_vec = extractFeaturesConfigured(dataset[idx], ext_cfg, (ext_cfg.use_gender ? &lexicon : nullptr));
+                auto f_vec = extractFeaturesConfigured(dataset[idx], ext_cfg,
+                    ext_cfg.use_gender ? &lexicon : nullptr,
+                    ext_cfg.use_path_lexicon ? &path_lexicon : nullptr,
+                    (ext_cfg.use_tfidf_overlap || ext_cfg.use_local_tfidf_overlap) ? &idf_lexicon : nullptr);
                 X_train.push_back(f_vec);
                 y_train.push_back(dataset[idx].label);
 
@@ -557,7 +592,10 @@ inline RepeatedCVResult runRepeatedCVExtended(
             std::vector<int> y_val(n_val);
             for (size_t i = 0; i < n_val; ++i) {
                 size_t idx = fold.val_indices[i];
-                X_val[i] = extractFeaturesConfigured(dataset[idx], ext_cfg, (ext_cfg.use_gender ? &lexicon : nullptr));
+                X_val[i] = extractFeaturesConfigured(dataset[idx], ext_cfg,
+                    ext_cfg.use_gender ? &lexicon : nullptr,
+                    ext_cfg.use_path_lexicon ? &path_lexicon : nullptr,
+                    (ext_cfg.use_tfidf_overlap || ext_cfg.use_local_tfidf_overlap) ? &idf_lexicon : nullptr);
                 y_val[i] = dataset[idx].label;
             }
 
@@ -573,23 +611,91 @@ inline RepeatedCVResult runRepeatedCVExtended(
             // Train model
             ExperimentConfig fold_cfg = cfg;
             fold_cfg.feature_dim = dim;
-            unsigned int fold_run_seed = seed * 1000 + static_cast<unsigned int>(f);
-            auto train_res = trainModelExtended(X_train, y_train, X_val, y_val, fold_cfg, fold_run_seed);
+            fold_cfg.candidate_feature_count = C;
+            fold_cfg.use_early_stopping = false;
+            const size_t member_count = std::max<size_t>(1, cfg.ensemble_members);
+            std::vector<std::vector<double>> fold_val_probs(n_val, std::vector<double>(3, 0.0));
+            for (size_t member = 0; member < member_count; ++member) {
+                const unsigned int fold_run_seed = seed * 1000 + static_cast<unsigned int>(f) +
+                    static_cast<unsigned int>(member * 100000);
+                std::vector<std::vector<double>>* member_x = &X_train;
+                std::vector<int>* member_y = &y_train;
+                std::vector<std::vector<double>> sampled_x;
+                std::vector<int> sampled_y;
+                const double sample_fraction = std::max(0.05, std::min(1.0, cfg.ensemble_sample_fraction));
+                if (sample_fraction < 1.0 || cfg.ensemble_bootstrap) {
+                    const size_t augmentation_factor = cfg.use_swap_aug ? 2 : 1;
+                    const size_t group_count = X_train.size() / augmentation_factor;
+                    std::vector<size_t> groups(group_count);
+                    std::iota(groups.begin(), groups.end(), 0);
+                    std::mt19937 sample_rng(fold_run_seed + 0x9e3779b9U);
+                    const size_t selected = std::max<size_t>(1, static_cast<size_t>(
+                        std::round(sample_fraction * static_cast<double>(group_count))));
+                    if (cfg.ensemble_bootstrap) {
+                        std::uniform_int_distribution<size_t> draw(0, group_count - 1);
+                        for (size_t g = 0; g < selected; ++g) groups[g] = draw(sample_rng);
+                    } else {
+                        std::shuffle(groups.begin(), groups.end(), sample_rng);
+                    }
+                    sampled_x.reserve(selected * augmentation_factor);
+                    sampled_y.reserve(selected * augmentation_factor);
+                    for (size_t g = 0; g < selected; ++g) {
+                        const size_t start = groups[g] * augmentation_factor;
+                        for (size_t offset = 0; offset < augmentation_factor; ++offset) {
+                            sampled_x.push_back(X_train[start + offset]);
+                            sampled_y.push_back(y_train[start + offset]);
+                        }
+                    }
+                    member_x = &sampled_x;
+                    member_y = &sampled_y;
+                }
+                const auto train_res = trainModelExtended(*member_x, *member_y, X_val, y_val,
+                                                          fold_cfg, fold_run_seed);
+                for (size_t i = 0; i < n_val; ++i) {
+                    for (int c = 0; c < 3; ++c) {
+                        const double p = std::max(1e-12, train_res.val_probs[i][c]);
+                        fold_val_probs[i][c] += (cfg.ensemble_geometric_mean ? std::log(p) : p) /
+                                                static_cast<double>(member_count);
+                    }
+                }
+            }
+
+            if (cfg.ensemble_geometric_mean) {
+                for (size_t i = 0; i < n_val; ++i) {
+                    const double max_logp = *std::max_element(fold_val_probs[i].begin(), fold_val_probs[i].end());
+                    double sum_exp = 0.0;
+                    for (int c = 0; c < 3; ++c) {
+                        fold_val_probs[i][c] = std::exp(fold_val_probs[i][c] - max_logp);
+                        sum_exp += fold_val_probs[i][c];
+                    }
+                    for (int c = 0; c < 3; ++c) fold_val_probs[i][c] /= sum_exp;
+                }
+            }
+
+            std::vector<int> fold_val_preds(n_val, 0);
+            for (size_t i = 0; i < n_val; ++i) {
+                if (fold_val_probs[i][1] > fold_val_probs[i][fold_val_preds[i]]) fold_val_preds[i] = 1;
+                if (fold_val_probs[i][2] > fold_val_probs[i][fold_val_preds[i]]) fold_val_preds[i] = 2;
+            }
+            const std::vector<double> unweighted = {1.0, 1.0, 1.0};
+            const auto fold_eval = evaluatePredictions(y_val, fold_val_preds, fold_val_probs, unweighted);
 
             FoldEvaluation fe;
             fe.fold_idx = fold_counter++;
             fe.seed = seed;
-            fe.accuracy = train_res.final_val_eval.accuracy;
-            fe.macro_f1 = train_res.final_val_eval.macro_f1;
-            fe.weighted_f1 = train_res.final_val_eval.weighted_f1;
-            fe.log_loss = train_res.final_val_eval.weighted_loss;
-            fe.eval_res = train_res.final_val_eval;
+            fe.accuracy = fold_eval.accuracy;
+            fe.macro_f1 = fold_eval.macro_f1;
+            fe.weighted_f1 = fold_eval.weighted_f1;
+            fe.log_loss = fold_eval.weighted_loss;
+            fe.eval_res = fold_eval;
+            fe.fold_labels = y_val;
+            fe.fold_probabilities = fold_val_probs;
             res.folds.push_back(fe);
 
             for (size_t i = 0; i < n_val; ++i) {
                 size_t orig_idx = fold.val_indices[i];
                 for (int c = 0; c < 3; ++c) {
-                    res.oof_probs[orig_idx][c] += train_res.val_probs[i][c] / static_cast<double>(seeds.size());
+                    res.oof_probs[orig_idx][c] += fold_val_probs[i][c] / static_cast<double>(seeds.size());
                 }
             }
         }
